@@ -3,8 +3,8 @@ from quart import Quart
 from logging import INFO
 from azure.communication.callautomation.aio import CallAutomationClient
 
-from config import ACS_CONNECTION_STRING
-from call_handler import setup_incoming_call_handler, setup_callback_handler
+from utils.config import ACS_CONNECTION_STRING
+from utils.call_handler import setup_incoming_call_handler, setup_callback_handler
 
 # Initialize the Quart application
 app = Quart(__name__)
