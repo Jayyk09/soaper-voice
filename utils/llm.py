@@ -1,7 +1,8 @@
 import openai
 import logging
 import json
-from openai.api_resources import ChatCompletion
+# from openai.api_resources import ChatCompletion
+from openai import AsyncAzureOpenAI
 from config import ANSWER_PROMPT_SYSTEM_TEMPLATE
 
 import os
@@ -17,31 +18,29 @@ AZURE_OPENAI_API_VERSION = os.getenv('AZURE_OPENAI_API_VERSION')
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client
-openai.api_key = AZURE_OPENAI_SERVICE_KEY
-openai.api_base = AZURE_OPENAI_SERVICE_ENDPOINT
-openai.api_type = 'azure'
-openai.api_version = AZURE_OPENAI_API_VERSION
+client = AsyncAzureOpenAI(
+        api_key=AZURE_OPENAI_SERVICE_KEY,
+        api_version=AZURE_OPENAI_API_VERSION,
+        azure_endpoint=AZURE_OPENAI_SERVICE_ENDPOINT,
+    )
 
 async def get_chat_completions_async(system_prompt, user_prompt, format_output=False):
     """Generate a response from OpenAI for the given prompts"""
     
     chat_request = [
-        {"role": "system", "content": f"{system_prompt}"},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"In less than 200 characters: respond to this question: {user_prompt}?"}
     ]
   
     try:
-        response = await ChatCompletion.acreate(
-            model=AZURE_OPENAI_DEPLOYMENT_MODEL_NAME,
-            deployment_id=AZURE_OPENAI_DEPLOYMENT_MODEL_NAME, 
+        response = await client.chat.completions.create(
+            model="gpt-4o",
             messages=chat_request,
             max_tokens=1000,
             response_format={"type": "json_object"} if format_output else None
         )
-        
         if response is not None:
-            response_content = response['choices'][0]['message']['content']
+            response_content = response.choices[0].message.content
         else:
             response_content = ""
             
@@ -79,4 +78,4 @@ async def extract_meeting_details(meeting_text):
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(get_chat_gpt_response("Hello, how are you?"))
+    print(asyncio.run(get_chat_gpt_response("what is a booking detail?")))

@@ -11,6 +11,7 @@ from config import (
     CALLBACK_EVENTS_URI, HELLO_PROMPT, TIMEOUT_SILENCE_PROMPT, GOODBYE_PROMPT,
     GOODBYE_CONTEXT
 )
+
 from utils.llm import get_chat_gpt_response
 from utils.voice_service import (
     handle_recognize, handle_play, handle_hangup, answer_call_async,
