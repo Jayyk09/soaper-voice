@@ -1,21 +1,17 @@
-import uuid
-import re
 from urllib.parse import urlencode
 from quart import request, Response, json
 from azure.eventgrid import EventGridEvent, SystemEventNames
 from azure.core.messaging import CloudEvent
-from azure.communication.callautomation import PhoneNumberIdentifier
 from utils.voice_service import answer_call_async
 # Global variables
 caller_id = None
+max_retry = 3  # Initialize max_retry variable
 
 from config import (
     CALLBACK_EVENTS_URI, HELLO_PROMPT, TIMEOUT_SILENCE_PROMPT, GOODBYE_PROMPT,
-    CONNECT_AGENT_PROMPT, CALLTRANSFER_FAILURE_PROMPT, AGENT_PHONE_NUMBER_EMPTY_PROMPT,
-    END_CALL_PHRASE_TO_CONNECT_AGENT, TRANSFER_FAILED_CONTEXT, CONNECT_AGENT_CONTEXT,
-    GOODBYE_CONTEXT, CHAT_RESPONSE_EXTRACT_PATTERN, AGENT_PHONE_NUMBER
+    GOODBYE_CONTEXT
 )
-from utils.llm import get_chat_gpt_response, has_intent_async
+from utils.llm import get_chat_gpt_response
 from utils.voice_service import (
     handle_recognize, handle_play, handle_hangup, answer_call_async,
     detect_meeting_booking_intent, process_meeting_details
@@ -102,7 +98,7 @@ async def setup_callback_handler(app, call_automation_client):
                         app.logger.info("Recognition completed, speech_text =%s", speech_text)
                         
                         if speech_text is not None and len(speech_text) > 0:
-                            # Check for meeting booking intent instead of escalation
+                            # Check for meeting booking intent
                             has_booking_intent = await detect_meeting_booking_intent(
                                 speech_text=speech_text,
                                 logger=app.logger
@@ -178,41 +174,8 @@ async def setup_callback_handler(app, call_automation_client):
                             "Your meeting has been booked. Thank you for calling!",
                             GOODBYE_CONTEXT
                         )
-                    elif context.lower() == TRANSFER_FAILED_CONTEXT.lower() or context.lower() == GOODBYE_CONTEXT.lower():
+                    elif context.lower() == GOODBYE_CONTEXT.lower():
                         await handle_hangup(call_automation_client, event.data['callConnectionId'])
-                    elif context.lower() == CONNECT_AGENT_CONTEXT.lower():
-                        if not AGENT_PHONE_NUMBER or AGENT_PHONE_NUMBER.isspace():
-                            app.logger.info(f"Agent phone number is empty")
-                            await handle_play(
-                                call_automation_client,
-                                event.data['callConnectionId'],
-                                AGENT_PHONE_NUMBER_EMPTY_PROMPT
-                            )
-                        else:
-                            app.logger.info(f"Initializing the Call transfer...")
-                            transfer_destination = PhoneNumberIdentifier(AGENT_PHONE_NUMBER)
-                            call_connection_client = call_automation_client.get_call_connection(
-                                call_connection_id=event.data['callConnectionId']
-                            )
-                            await call_connection_client.transfer_call_to_participant(
-                                target_participant=transfer_destination
-                            )
-                            app.logger.info(f"Transfer call initiated: {context}")
-                
-                elif event.type == "Microsoft.Communication.CallTransferAccepted":
-                    app.logger.info(f"Call transfer accepted event received for connection id: {event.data['callConnectionId']}")
-                
-                elif event.type == "Microsoft.Communication.CallTransferFailed":
-                    app.logger.info(f"Call transfer failed event received for connection id: {event.data['callConnectionId']}")
-                    resultInformation = event.data['resultInformation']
-                    sub_code = resultInformation['subCode']
-                    app.logger.info(f"Encountered error during call transfer, subCode={sub_code}")
-                    await handle_play(
-                        call_automation_client,
-                        event.data['callConnectionId'],
-                        CALLTRANSFER_FAILURE_PROMPT, 
-                        TRANSFER_FAILED_CONTEXT
-                    )
                     
             return Response(status=200)
             

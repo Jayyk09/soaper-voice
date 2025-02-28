@@ -2,13 +2,18 @@ import openai
 import logging
 import json
 from openai.api_resources import ChatCompletion
-from utils.config import (
-    AZURE_OPENAI_SERVICE_KEY, 
-    AZURE_OPENAI_SERVICE_ENDPOINT, 
-    AZURE_OPENAI_DEPLOYMENT_MODEL, 
-    AZURE_OPENAI_DEPLOYMENT_MODEL_NAME,
-    ANSWER_PROMPT_SYSTEM_TEMPLATE
-)
+from config import ANSWER_PROMPT_SYSTEM_TEMPLATE
+
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+AZURE_OPENAI_SERVICE_KEY = os.getenv('AZURE_OPENAI_API_KEY')
+AZURE_OPENAI_SERVICE_ENDPOINT = os.getenv('AZURE_OPENAI_ENDPOINT')
+AZURE_OPENAI_DEPLOYMENT_MODEL_NAME = os.getenv('AZURE_OPENAI_DEPLOYMENT_MODEL_NAME')
+AZURE_OPENAI_API_VERSION = os.getenv('AZURE_OPENAI_API_VERSION')
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +21,7 @@ logger = logging.getLogger(__name__)
 openai.api_key = AZURE_OPENAI_SERVICE_KEY
 openai.api_base = AZURE_OPENAI_SERVICE_ENDPOINT
 openai.api_type = 'azure'
-openai.api_version = '2023-05-15'
+openai.api_version = AZURE_OPENAI_API_VERSION
 
 async def get_chat_completions_async(system_prompt, user_prompt, format_output=False):
     """Generate a response from OpenAI for the given prompts"""
@@ -28,7 +33,7 @@ async def get_chat_completions_async(system_prompt, user_prompt, format_output=F
   
     try:
         response = await ChatCompletion.acreate(
-            model=AZURE_OPENAI_DEPLOYMENT_MODEL,
+            model=AZURE_OPENAI_DEPLOYMENT_MODEL_NAME,
             deployment_id=AZURE_OPENAI_DEPLOYMENT_MODEL_NAME, 
             messages=chat_request,
             max_tokens=1000,
@@ -73,4 +78,5 @@ async def extract_meeting_details(meeting_text):
 
 
 if __name__ == "__main__":
-    print(get_chat_gpt_response("Hello, how are you?"))
+    import asyncio
+    asyncio.run(get_chat_gpt_response("Hello, how are you?"))
