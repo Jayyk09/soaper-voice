@@ -74,8 +74,7 @@ async def extract_meeting_details(meeting_text):
     except json.JSONDecodeError:
         # Return a default structure if JSON parsing fails
         return {"time": "unknown time", "date": "unknown date", "error": "Failed to parse meeting details"}
-
-
+    
 if __name__ == "__main__":
     import asyncio
-    print(asyncio.run(get_chat_gpt_response("what is a booking detail?")))
+    print(asyncio.run(get_chat_gpt_response("what is a booking time and date detail?")))

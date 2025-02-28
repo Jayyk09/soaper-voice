@@ -3,6 +3,7 @@ from quart import request, Response, json
 from azure.eventgrid import EventGridEvent, SystemEventNames
 from azure.core.messaging import CloudEvent
 from utils.voice_service import answer_call_async
+import uuid
 # Global variables
 caller_id = None
 max_retry = 3  # Initialize max_retry variable
