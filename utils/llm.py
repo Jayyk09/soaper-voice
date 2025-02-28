@@ -47,3 +47,6 @@ async def get_chat_completions_async(system_prompt, user_prompt):
 async def get_chat_gpt_response(speech_input):
     """Process speech input through the OpenAI model with the standard template"""
     return await get_chat_completions_async(ANSWER_PROMPT_SYSTEM_TEMPLATE, speech_input)
+
+if __name__ == "__main__":
+    print(get_chat_gpt_response("Hello, how are you?"))
