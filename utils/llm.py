@@ -17,16 +17,10 @@ load_dotenv()
 
 AZURE_OPENAI_API_KEY = os.getenv('AZURE_OPENAI_API_KEY')
 AZURE_OPENAI_SERVICE_ENDPOINT = os.getenv('AZURE_OPENAI_ENDPOINT')
-AZURE_OPENAI_DEPLOYMENT_MODEL_NAME = os.getenv('AZURE_OPENAI_DEPLOYMENT_MODEL_NAME')
+AZURE_OPENAI_MODEL_NAME = os.getenv('AZURE_OPENAI_MODEL_NAME')
 AZURE_OPENAI_API_VERSION = os.getenv('AZURE_OPENAI_API_VERSION')
 
 logger = logging.getLogger(__name__)
-
-# client = AsyncAzureOpenAI(
-#         api_key=AZURE_OPENAI_API_KEY,
-#         api_version=AZURE_OPENAI_API_VERSION,
-#         azure_endpoint=AZURE_OPENAI_SERVICE_ENDPOINT,
-#     )
 
 class LLMClient:
     def __init__(self):
