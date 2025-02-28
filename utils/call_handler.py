@@ -17,7 +17,8 @@ from config import (
 )
 from utils.llm import get_chat_gpt_response, has_intent_async
 from utils.voice_service import (
-    handle_recognize, handle_play, handle_hangup, answer_call_async
+    handle_recognize, handle_play, handle_hangup, answer_call_async,
+    detect_meeting_booking_intent, process_meeting_details
 )
 
 async def setup_incoming_call_handler(app, call_automation_client):
@@ -218,42 +219,3 @@ async def setup_callback_handler(app, call_automation_client):
         except Exception as ex:
             app.logger.error(f"Error in event handling: {ex}")
             return Response(status=500)
-
-# New function to detect meeting booking intent
-async def detect_meeting_booking_intent(speech_text, logger):
-    """
-    Detect if the user wants to book a meeting based on their speech
-    """
-    booking_keywords = [
-        "book a meeting", "schedule a meeting", "set up a meeting", 
-        "make an appointment", "book time", "schedule time",
-        "calendar", "appointment", "booking", "schedule"
-    ]
-    
-    speech_lower = speech_text.lower()
-    
-    # Simple keyword matching
-    for keyword in booking_keywords:
-        if keyword in speech_lower:
-            logger.info(f"Meeting booking intent detected with keyword: {keyword}")
-            return True
-            
-    # If more complex detection is needed, you could use the LLM here
-    has_intent = await has_intent_async(speech_text, "book_meeting")
-    logger.info(f"LLM meeting booking intent detection result: {has_intent}")
-    
-    return has_intent
-
-# New function to process meeting details
-async def process_meeting_details(meeting_text):
-    """
-    Process the meeting details from user speech and return a confirmation message
-    """
-    # In a real implementation, you would parse date, time, duration, etc.
-    # For now, we'll just acknowledge the input
-    
-    # You could use the LLM to extract structured data from the text
-    # Or use a dedicated date/time parser
-    
-    return f"I've noted your meeting request. To confirm, you said: '{meeting_text}'. Your meeting has been scheduled."
-

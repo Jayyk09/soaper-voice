@@ -1,13 +1,41 @@
+import asyncio
 import re
 from azure.communication.callautomation import PhoneNumberIdentifier, RecognizeInputType, TextSource
-from utils.config import COGNITIVE_SERVICE_ENDPOINT
+import os
 
-def get_sentiment_score(sentiment_score):
-    """Extract numerical sentiment score from text response"""
-    pattern = r"(\d)+"
-    regex = re.compile(pattern)
-    match = regex.search(sentiment_score)
-    return int(match.group()) if match else -1
+from utils.llm import extract_meeting_details
+
+COGNITIVE_SERVICE_ENDPOINT = os.getenv('COGNITIVE_SERVICE_ENDPOINT')
+
+# New function to detect meeting booking intent
+async def detect_meeting_booking_intent(speech_text, logger):
+    """
+    Detect if the user wants to book a meeting based on their speech
+    """
+    booking_keywords = [
+        "book a meeting", "schedule a meeting", "set up a meeting", 
+        "make an appointment", "book time", "schedule time",
+        "calendar", "appointment", "booking", "schedule"
+    ]
+    
+    speech_lower = speech_text.lower()
+    
+    # Simple keyword matching
+    for keyword in booking_keywords:
+        if keyword in speech_lower:
+            logger.info(f"Meeting booking intent detected with keyword: {keyword}")
+            return True
+    return False
+            
+# New function to process meeting details
+async def process_meeting_details(meeting_text):
+    """
+    Process the meeting details from user speech and return a confirmation message
+    """
+    meeting_details = await extract_meeting_details(meeting_text)
+
+    return f"I've noted your meeting request. To confirm, you said: '{meeting_text}'. Your meeting has been scheduled for '{meeting_details}'."
+
 
 async def handle_recognize(call_automation_client, reply_text, caller_id, call_connection_id, context=""):
     """Play prompt and start speech recognition"""
@@ -46,3 +74,11 @@ async def answer_call_async(call_automation_client, incoming_call_context, callb
         cognitive_services_endpoint=COGNITIVE_SERVICE_ENDPOINT,
         callback_url=callback_url
     )
+
+if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
+    bookMeeting = asyncio.run(detect_meeting_booking_intent("I want to book a meeting with John Doe on Monday at 10 AM", logger))
+    print(bookMeeting)
