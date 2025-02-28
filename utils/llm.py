@@ -24,57 +24,61 @@ client = AsyncAzureOpenAI(
         azure_endpoint=AZURE_OPENAI_SERVICE_ENDPOINT,
     )
 
-async def get_chat_completions_async(system_prompt, user_prompt, format_output=False):
-    """Generate a response from OpenAI for the given prompts"""
-    
-    chat_request = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"In less than 200 characters: respond to this question: {user_prompt}?"}
-    ]
-  
-    try:
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=chat_request,
-            max_tokens=1000,
-            response_format={"type": "json_object"} if format_output else None
+class LLMClient:
+    def __init__(self):
+        self.client = AzureOpenAI(
+            api_key=os.environ["OPENAI_API_KEY"],
+            api_version=AZURE_OPENAI_API_VERSION,
+            azure_endpoint=AZURE_OPENAI_SERVICE_ENDPOINT,
         )
-        if response is not None:
-            response_content = response.choices[0].message.content
-        else:
-            response_content = ""
-            
-        return response_content
-    
-    except Exception as e:
-        logger.error("Error in OpenAI API call: %s", e)
-        return ""
-    
-async def get_chat_gpt_response(speech_input):
-    """Process speech input through the OpenAI model with the standard template"""
-    return await get_chat_completions_async(ANSWER_PROMPT_SYSTEM_TEMPLATE, speech_input)
 
-async def extract_meeting_details(meeting_text):
-    """
-    Use Azure OpenAI to extract the time and date for the meeting from the given text
-    """
-    system_prompt = '''
-    Extract the time and date for the meeting from the following text. Return the response in JSON format.
-    The response should be in the following format:
-    {
-        "time": "10:00 AM",
-        "date": "2025-01-01"
-    }
-    '''
-    json_response = await get_chat_completions_async(system_prompt, meeting_text, format_output=True)
-    try:
-        # Parse the JSON string into a Python dictionary
-        meeting_data = json.loads(json_response)
-        return meeting_data
-    except json.JSONDecodeError:
-        # Return a default structure if JSON parsing fails
-        return {"time": "unknown time", "date": "unknown date", "error": "Failed to parse meeting details"}
-    
-if __name__ == "__main__":
-    import asyncio
-    print(asyncio.run(get_chat_gpt_response("what is a booking time and date detail?")))
+    def draft_begin_message(self):
+        return ResponseResponse(
+            response_id=0,
+            content=begin_sentence,
+            content_complete=True,
+            end_call=False,
+        )
+
+    def convert_transcript_to_openai_messages(self, transcript: List[Utterance]):
+        messages = []
+        for utterance in transcript:
+            role = "assistant" if utterance.role == "agent" else "user"
+            messages.append({"role": role, "content": utterance.content})
+        return messages
+
+    def prepare_prompt(self, request: ResponseRequiredRequest):
+        prompt = [{"role": "system", "content": agent_prompt}]
+        prompt.extend(self.convert_transcript_to_openai_messages(request.transcript))
+
+        if request.interaction_type == "reminder_required":
+            prompt.append({
+                "role": "user",
+                "content": "(Now the user has not responded in a while, you would say:)"
+            })
+        
+        return prompt
+
+    async def draft_response(self, request: ResponseRequiredRequest):
+        prompt = self.prepare_prompt(request)
+        stream = await self.client.chat.completions.create(
+            model="gpt-4o",  # Or use a 3.5 model for speed
+            messages=prompt,
+            stream=True,
+        )
+
+        async for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                yield ResponseResponse(
+                    response_id=request.response_id,
+                    content=chunk.choices[0].delta.content,
+                    content_complete=False,
+                    end_call=False,
+                )
+
+        yield ResponseResponse(
+            response_id=request.response_id,
+            content="",
+            content_complete=True,
+            end_call=False,
+        )
