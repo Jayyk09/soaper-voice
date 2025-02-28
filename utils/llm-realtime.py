@@ -6,7 +6,6 @@ from azure.communication.callautomation import (
 from azure.communication.callautomation.aio import CallAutomationClient
 import uuid
 import json
-from openairealtime import RealTimeClient
 
 ACS_CONNECTION_STRING = "ACS_CONNECTION_STRING"
 CALLBACK_URI_HOST = "CALLBACK_URI_HOST"
