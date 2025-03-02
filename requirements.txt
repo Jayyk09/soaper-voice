@@ -7,3 +7,4 @@ retell-sdk
 uvicorn
 fastapi
 fastapi[standard]
+'crewai[tools]'
