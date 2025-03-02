@@ -1,17 +1,32 @@
-research_task:
-  description: >
-    Conduct a thorough research about {topic}
-    Make sure you find any interesting and relevant information given
-    the current year is {current_year}.
-  expected_output: >
-    A list with 10 bullet points of the most relevant information about {topic}
-  agent: researcher
+# config/tasks.yaml
+handle_general_inquiry:
+  description: Handle general inquiries and delegate to appointment specialist if needed
+  expected_output: Response to caller's inquiry
+  agent: general_agent
+  context: >
+    The caller has contacted Soaper Medical Office. Greet them warmly as Joann and determine 
+    their needs. If they need general information about the practice, services, or have 
+    general questions, assist them directly. If they want to book an appointment, inform 
+    them you'll connect them with the appointment specialist.
+  async_execution: false
+  output_json:
+    response: {type: string, description: The response to provide to the caller}
 
-reporting_task:
-  description: >
-    Review the context you got and expand each topic into a full section for a report.
-    Make sure the report is detailed and contains any and all relevant information.
-  expected_output: >
-    A fully fledged report with the main topics, each with a full section of information.
-    Formatted as markdown without '```'
-  agent: reporting_analyst
+book_appointment:
+  description: Collect all necessary information to book a doctor's appointment
+  expected_output: Complete appointment details and confirmation
+  agent: appointment_specialist
+  context: >
+    The caller wants to book a doctor's appointment. Introduce yourself as the appointment 
+    specialist and methodically collect all required information: full name, date of birth, 
+    preferred date and time (offer alternatives if needed), reason for visit, insurance 
+    information (provider and member ID), and contact number. After collecting all information, 
+    provide a confirmation summary and any preparation instructions if applicable. Maintain a 
+    friendly, professional tone throughout.
+  async_execution: false
+  output_json:
+    appointment_date: {type: string, description: Scheduled date for the appointment}
+    appointment_time: {type: string, description: Scheduled time for the appointment}
+    reason_for_visit: {type: string, description: Primary reason for the appointment}
+    confirmation: {type: string, description: Appointment confirmation details}
+    response: {type: string, description: The full response to provide to the caller}
