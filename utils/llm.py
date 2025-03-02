@@ -11,7 +11,7 @@ from openai import AsyncAzureOpenAI
 from dotenv import load_dotenv
 import logging
 import json
-import voiceapp.src.voiceapp.crew as Voiceapp
+from agents.crew import Voiceapp
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,11 +27,11 @@ class LLMClient:
     def __init__(self):
         self.crew = Voiceapp().crew().kickoff()
 
-        self.client = AsyncAzureOpenAI(
-            api_key=AZURE_OPENAI_API_KEY,
-            api_version=AZURE_OPENAI_API_VERSION,
-            azure_endpoint=AZURE_OPENAI_SERVICE_ENDPOINT,
-        )
+        # self.client = AsyncAzureOpenAI(
+        #     api_key=AZURE_OPENAI_API_KEY,
+        #     api_version=AZURE_OPENAI_API_VERSION,
+        #     azure_endpoint=AZURE_OPENAI_SERVICE_ENDPOINT,
+        # )
 
     def draft_begin_message(self):
         return ResponseResponse(
@@ -62,7 +62,7 @@ class LLMClient:
 
     async def draft_response(self, request: ResponseRequiredRequest):
         prompt = self.prepare_prompt(request)
-        stream = self.swarm.run(prompt, stream=True)
+        stream = self.crew.run(prompt, stream=True)
 
         for chunk in stream:
             if "content" in chunk and chunk['content']:

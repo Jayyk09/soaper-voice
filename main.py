@@ -62,119 +62,71 @@ async def handle_webhook(request: Request):
 
 @app.websocket("/llm-websocket/{call_id}")
 async def websocket_handler(websocket: WebSocket, call_id: str):
-    """Handles real-time communication with Retell's server over WebSocket."""
     try:
         await websocket.accept()
-        llm_client = LLMClient()
-        
-        # Initialize call state
-        call_state = {
-            "in_appointment_collection": False,
-            "appointment_details": {},
-            "intent_checked": False
-        }
-        
-        # Send initial configuration
-        await websocket.send_json(ConfigResponse(
+        llm_client = None
+
+        # Send optional config to Retell server
+        config = ConfigResponse(
             response_type="config",
-            config={"auto_reconnect": True, "call_details": True},
-            response_id=1
-        ).__dict__)
-        
+            config={
+                "auto_reconnect": True,
+                "call_details": True,
+            },
+            response_id=1,
+        )
+        await websocket.send_json(config.__dict__)
+        response_id = 0
+
+
         async def handle_message(request_json):
-            nonlocal call_state
-            
-            try:
-                if websocket.client_state != WebSocketState.CONNECTED:
-                    print("WebSocket disconnected.")
-                    return
-                
-                interaction_type = request_json.get("interaction_type")
-                response_id = request_json.get("response_id", 0)
-                
-                print(f"Handling interaction type: {interaction_type}")
-                
-                if interaction_type == "call_details":
-                    await websocket.send_json(llm_client.draft_begin_message().__dict__)
-                elif interaction_type == "ping_pong":
-                    await websocket.send_json({"response_type": "ping_pong", "timestamp": request_json.get("timestamp")})
-                elif interaction_type in ("response_required", "reminder_required"):
-                    request = ResponseRequiredRequest(
-                        interaction_type=interaction_type,
-                        response_id=response_id,
-                        transcript=request_json.get("transcript", []),
-                    )
-                    
-                    # If we're not already collecting appointment info, check for intent
-                    if not call_state["in_appointment_collection"] and not call_state["intent_checked"]:
-                        call_state["intent_checked"] = True
-                        has_intent = await llm_client.detect_appointment_intent(request.transcript)
-                        
-                        if has_intent:
-                            # Start appointment collection process
-                            collection_state = await llm_client.start_appointment_collection(request.transcript)
-                            call_state.update(collection_state)
-                            
-                            # Send the appointment collection response
-                            await websocket.send_json(ResponseResponse(
-                                response_id=request.response_id,
-                                content=call_state["next_response"],
-                                content_complete=True,
-                                end_call=False,
-                            ).__dict__)
-                            return
-                    
-                    # If we're in appointment collection mode, update details
-                    elif call_state["in_appointment_collection"]:
-                        updated_details = await llm_client.update_appointment_details(
-                            request.transcript, 
-                            call_state["appointment_details"]
-                        )
-                        
-                        call_state["appointment_details"] = {
-                            "date": updated_details.get("date"),
-                            "time": updated_details.get("time"),
-                            "doctor": updated_details.get("doctor")
-                        }
-                        
-                        # Check if collection is complete
-                        if updated_details.get("collection_complete", False):
-                            call_state["in_appointment_collection"] = False
-                            print(f"Appointment details collected: {call_state['appointment_details']}")
-                            
-                            # Add code here to save the appointment to your system
-                            
-                            # Send a confirmation message
-                            confirmation = f"Great! I've scheduled your appointment for {updated_details.get('date')} at {updated_details.get('time')}. Is there anything else you'd like help with?"
-                            
-                            await websocket.send_json(ResponseResponse(
-                                response_id=request.response_id,
-                                content=confirmation,
-                                content_complete=True,
-                                end_call=False,
-                            ).__dict__)
-                            return
-                    
-                    # Reset intent check for new user messages
-                    if interaction_type == "response_required" and not call_state["in_appointment_collection"]:
-                        call_state["intent_checked"] = False
-                    
-                    # Handle normal response for non-appointment interactions
-                    async for event in llm_client.draft_response(request):
-                        await websocket.send_json(event.__dict__)
-                        if request.response_id < response_id:
-                            break
-            except Exception as e:
-                print(f"Error handling message: {e}")
-        
+            nonlocal response_id
+            nonlocal llm_client
+            # There are 5 types of interaction_type: call_details, pingpong, update_only, response_required, and reminder_required.
+            # Not all of them need to be handled, only response_required and reminder_required.
+            if request_json["interaction_type"] == "call_details":
+                # Send first message to signal ready of server
+                first_event = llm_client.draft_begin_message()
+                await websocket.send_json(first_event.__dict__)
+                return
+            if request_json["interaction_type"] == "ping_pong":
+                await websocket.send_json(
+                    {
+                        "response_type": "ping_pong",
+                        "timestamp": request_json["timestamp"],
+                    }
+                )
+                return
+            if request_json["interaction_type"] == "update_only":
+                return
+            if (
+                request_json["interaction_type"] == "response_required"
+                or request_json["interaction_type"] == "reminder_required"
+            ):
+                response_id = request_json["response_id"]
+                request = ResponseRequiredRequest(
+                    interaction_type=request_json["interaction_type"],
+                    response_id=response_id,
+                    transcript=request_json["transcript"],
+                )
+                print(
+                    f"""Received interaction_type={request_json['interaction_type']}, response_id={response_id}, last_transcript={request_json['transcript'][-1]['content']}"""
+                )
+
+                async for event in llm_client.draft_response(request):
+                    await websocket.send_json(event.__dict__)
+                    if request.response_id < response_id:
+                        break  # new response needed, abandon this one
+
         async for data in websocket.iter_json():
-            await handle_message(data)
+            asyncio.create_task(handle_message(data))
+
     except WebSocketDisconnect:
-        print(f"WebSocket disconnected for call {call_id}")
-    except ConnectionTimeoutError:
-        print(f"Connection timeout for call {call_id}")
+        print(f"LLM WebSocket disconnected for {call_id}")
+    except ConnectionTimeoutError as e:
+        print("Connection timeout error for {call_id}")
     except Exception as e:
-        print(f"WebSocket error for call {call_id}: {e}")
+        print(f"Error in LLM WebSocket: {e} for {call_id}")
         await websocket.close(1011, "Server error")
     finally:
-        print(f"WebSocket connection closed for call {call_id}")
+        print(f"LLM WebSocket connection closed for {call_id}")

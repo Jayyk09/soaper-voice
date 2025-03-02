@@ -1,62 +1,66 @@
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
+import os
+from openai import AsyncAzureOpenAI
 
-# If you want to run a snippet of code before or after the crew starts, 
-# you can use the @before_kickoff and @after_kickoff decorators
-# https://docs.crewai.com/concepts/crews#example-crew-class-with-decorators
+AZURE_OPENAI_API_KEY = os.getenv('AZURE_OPENAI_API_KEY')
+AZURE_OPENAI_SERVICE_ENDPOINT = os.getenv('AZURE_OPENAI_ENDPOINT')
+AZURE_OPENAI_MODEL_NAME = os.getenv('AZURE_OPENAI_MODEL_NAME')
+AZURE_OPENAI_API_VERSION = os.getenv('AZURE_OPENAI_API_VERSION')
+
+azureLLM = AsyncAzureOpenAI(
+    api_key=AZURE_OPENAI_API_KEY,
+    api_version=AZURE_OPENAI_API_VERSION,
+    azure_endpoint=AZURE_OPENAI_SERVICE_ENDPOINT,
+    model=AZURE_OPENAI_MODEL_NAME,
+)
 
 @CrewBase
-class Voiceapp():
-	"""Voiceapp crew"""
+class MedicalOfficeVoiceApp():
+    """Medical Office Voice Assistant Crew"""
 
-	# Learn more about YAML configuration files here:
-	# Agents: https://docs.crewai.com/concepts/agents#yaml-configuration-recommended
-	# Tasks: https://docs.crewai.com/concepts/tasks#yaml-configuration-recommended
-	agents_config = 'config/agents.yaml'
-	tasks_config = 'config/tasks.yaml'
+    # Configuration files
+    agents_config = 'config/agents.yaml'
+    tasks_config = 'config/tasks.yaml'
 
-	# If you would like to add tools to your agents, you can learn more about it here:
-	# https://docs.crewai.com/concepts/agents#agent-tools
-	@agent
-	def researcher(self) -> Agent:
-		return Agent(
-			config=self.agents_config['researcher'],
-			verbose=True
-		)
+    @agent
+    def general_agent(self) -> Agent:
+        return Agent(
+            config=self.agents_config['general_agent'],
+            verbose=True,
+            llm=azureLLM,
+            allow_delegation=True
+        )
 
-	@agent
-	def reporting_analyst(self) -> Agent:
-		return Agent(
-			config=self.agents_config['reporting_analyst'],
-			verbose=True
-		)
+    @agent
+    def appointment_specialist(self) -> Agent:
+        return Agent(
+            config=self.agents_config['appointment_specialist'],
+            verbose=True,
+            llm=azureLLM,
+        )
 
-	# To learn more about structured task outputs, 
-	# task dependencies, and task callbacks, check out the documentation:
-	# https://docs.crewai.com/concepts/tasks#overview-of-a-task
-	@task
-	def research_task(self) -> Task:
-		return Task(
-			config=self.tasks_config['research_task'],
-		)
+    @task
+    def handle_general_inquiry(self) -> Task:
+        return Task(
+            config=self.tasks_config['handle_general_inquiry'],
+            agent=self.general_agent
+        )
 
-	@task
-	def reporting_task(self) -> Task:
-		return Task(
-			config=self.tasks_config['reporting_task'],
-			output_file='report.md'
-		)
+    @task
+    def book_appointment(self) -> Task:
+        return Task(
+            config=self.tasks_config['book_appointment'],
+            agent=self.appointment_specialist
+        )
 
-	@crew
-	def crew(self) -> Crew:
-		"""Creates the Voiceapp crew"""
-		# To learn how to add knowledge sources to your crew, check out the documentation:
-		# https://docs.crewai.com/concepts/knowledge#what-is-knowledge
-
-		return Crew(
-			agents=self.agents, # Automatically created by the @agent decorator
-			tasks=self.tasks, # Automatically created by the @task decorator
-			process=Process.sequential,
-			verbose=True,
-			# process=Process.hierarchical, # In case you wanna use that instead https://docs.crewai.com/how-to/Hierarchical/
-		)
+    @crew
+    def crew(self) -> Crew:
+        """Creates the Medical Office Voice Assistant crew"""
+        return Crew(
+            agents=self.agents,
+            tasks=[self.handle_general_inquiry, self.book_appointment],
+            process=Process.hierarchical,  # Using hierarchical to enable delegation
+            verbose=True,
+            llm=azureLLM,
+        )
