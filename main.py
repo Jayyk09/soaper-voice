@@ -38,214 +38,90 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Handle webhook from Retell server
+# Handle webhook from Retell server. This is used to receive events from Retell server.
+# Including call_started, call_ended, call_analyzed
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     try:
         post_data = await request.json()
         valid_signature = retell.verify(
             json.dumps(post_data, separators=(",", ":"), ensure_ascii=False),
-            api_key=retell_api_key,
+            api_key=str(os.environ["RETELL_API_KEY"]),
             signature=str(request.headers.get("X-Retell-Signature")),
         )
-        
         if not valid_signature:
-            print(f"Received Unauthorized {post_data['event']}")
+            print(
+                "Received Unauthorized",
+                post_data["event"],
+                post_data["data"]["call_id"],
+            )
             return JSONResponse(status_code=401, content={"message": "Unauthorized"})
-            
-        # Log different call events
         if post_data["event"] == "call_started":
-            print(f"Call started: {post_data['call'].get('from_number', 'unknown')}")
-            
+            print("Call started event", post_data['call']['from_number'])
         elif post_data["event"] == "call_ended":
-            print(f"Call ended: {post_data['call'].get('id', 'unknown')}")
-            
+            print("Call ended event", post_data)
         elif post_data["event"] == "call_analyzed":
-            print(f"Call analyzed: {post_data['call'].get('id', 'unknown')}")
-                
+            print("Call analyzed event", post_data['call'])
+
         else:
-            print(f"Unknown event: {post_data['event']}")
-            
+            print("Unknown event", post_data["event"])
         return JSONResponse(status_code=200, content={"received": True})
-        
     except Exception as err:
-        print(f"Error in webhook: {str(err)}")
-        traceback.print_exc()  # Print detailed traceback
+        print(f"Error in webhook: {err}")
         return JSONResponse(
             status_code=500, content={"message": "Internal Server Error"}
         )
 
 @app.websocket("/llm-websocket/{call_id}")
 async def websocket_handler(websocket: WebSocket, call_id: str):
-    """Handle WebSocket connection for real-time voice interaction"""
-    llm_client = None
-    
+    """Handles real-time communication with Retell's server over WebSocket."""
     try:
         await websocket.accept()
-        print(f"WebSocket connection opened for call {call_id}")
+        llm_client = LLMClient()
         
-        # Debug: Print all request headers
-        print(f"WebSocket headers: {dict(websocket.headers)}")
+        # Send initial configuration
+        await websocket.send_json(ConfigResponse(
+            response_type="config",
+            config={"auto_reconnect": True, "call_details": True},
+            response_id=1
+        ).__dict__)
         
-        # Initialize LLM client for this call
-        try:
-            llm_client = LLMClient()
-            print(f"LLM client initialized successfully for call {call_id}")
-        except Exception as e:
-            print(f"Error initializing LLM client: {str(e)}")
-            traceback.print_exc()
-            raise
-        
-        # Send configuration to Retell server
-        try:
-            config = ConfigResponse(
-                response_type="config",
-                config={
-                    "auto_reconnect": True,
-                    "call_details": True,
-                },
-                response_id=1,
-            )
-            print(f"Sending config: {config}")
-            await websocket.send_json(config.__dict__)
-            print("Config sent successfully")
-        except Exception as e:
-            print(f"Error sending config: {str(e)}")
-            traceback.print_exc()
-            raise
-        
-        # Track response ID
-        response_id = 0
-
         async def handle_message(request_json):
-            nonlocal response_id
-            nonlocal llm_client
-            
-            print(f"Received message with interaction_type: {request_json['interaction_type']}")
-            
             try:
-                # Verify llm_client is properly initialized
-                if llm_client is None:
-                    print(f"LLM client is None for call {call_id}, reinitializing")
-                    llm_client = LLMClient()
+                if websocket.client_state != WebSocketState.CONNECTED:
+                    print("WebSocket disconnected.")
+                    return
                 
-                # Handle different interaction types
-                if request_json["interaction_type"] == "call_details":
-                    print(f"Handling call_details for {call_id}")
-                    # Send initial greeting
-                    try:
-                        first_event = llm_client.draft_begin_message()
-                        print(f"Initial greeting: {first_event.content}")
-                        await websocket.send_json(first_event.__dict__)
-                        print("Initial greeting sent successfully")
-                    except Exception as e:
-                        print(f"Error sending initial greeting: {str(e)}")
-                        traceback.print_exc()
-                    return
-                    
-                elif request_json["interaction_type"] == "ping_pong":
-                    # Respond to keep-alive pings
-                    ping_response = {
-                        "response_type": "ping_pong",
-                        "timestamp": request_json["timestamp"],
-                    }
-                    await websocket.send_json(ping_response)
-                    print(f"Responded to ping_pong with timestamp {request_json['timestamp']}")
-                    return
-                    
-                elif request_json["interaction_type"] == "update_only":
-                    # No response needed for updates
-                    print("Received update_only, no response needed")
-                    return
-                    
-                elif request_json["interaction_type"] in ["response_required", "reminder_required"]:
-                    print(f"Handling {request_json['interaction_type']} for {call_id}")
-                    # Process response or reminder requests
-                    response_id = request_json["response_id"]
-                    
-                    # Debug: Print the transcript structure
-                    print(f"Transcript type: {type(request_json['transcript'])}")
-                    if len(request_json['transcript']) > 0:
-                        print(f"First transcript item type: {type(request_json['transcript'][0])}")
-                    
-                    # Create request object
-                    try:
-                        request = ResponseRequiredRequest(
-                            interaction_type=request_json["interaction_type"],
-                            response_id=response_id,
-                            transcript=request_json["transcript"],
-                        )
-                        print(f"Created request object with response_id {response_id}")
-                    except Exception as e:
-                        print(f"Error creating request object: {str(e)}")
-                        traceback.print_exc()
-                        raise
-                    
-                    # Log the request
-                    try:
-                        last_user_message = ""
-                        if request_json["transcript"] and len(request_json["transcript"]) > 0:
-                            last_utterance = request_json["transcript"][-1]
-                            print(f"Last utterance: {last_utterance}")
-                            
-                            if hasattr(last_utterance, 'content'):
-                                last_user_message = last_utterance.content
-                            elif isinstance(last_utterance, dict) and 'content' in last_utterance:
-                                last_user_message = last_utterance['content']
-                            
-                        print(
-                            f"Processing {request_json['interaction_type']}, "
-                            f"response_id={response_id}, "
-                            f"last_message='{last_user_message[:50]}...'"
-                        )
-                    except Exception as e:
-                        print(f"Error accessing transcript: {str(e)}")
-                        traceback.print_exc()
-
-                    # Generate and stream response
-                    try:
-                        print("About to call draft_response")
-                        async for event in llm_client.draft_response(request):
-                            print(f"Got response chunk: {event.content}")
-                            await websocket.send_json(event.__dict__)
-                            # If a new response is needed, abandon current one
-                            if request.response_id < response_id:
-                                print("Abandoning response due to new request")
-                                break
-                        print("Finished streaming response")
-                    except Exception as e:
-                        print(f"Error generating or streaming response: {str(e)}")
-                        traceback.print_exc()
-                        raise
-                        
-                else:
-                    print(f"Unknown interaction_type: {request_json['interaction_type']}")
-                    
+                interaction_type = request_json.get("interaction_type")
+                response_id = request_json.get("response_id", 0)
+                
+                print(f"Handling interaction type: {interaction_type}")
+                
+                if interaction_type == "call_details":
+                    await websocket.send_json(llm_client.draft_begin_message().__dict__)
+                elif interaction_type == "ping_pong":
+                    await websocket.send_json({"response_type": "ping_pong", "timestamp": request_json.get("timestamp")})
+                elif interaction_type in ("response_required", "reminder_required"):
+                    request = ResponseRequiredRequest(
+                        interaction_type=interaction_type,
+                        response_id=response_id,
+                        transcript=request_json.get("transcript", []),
+                    )
+                    async for event in llm_client.draft_response(request):
+                        await websocket.send_json(event.__dict__)
+                        if request.response_id < response_id:
+                            break
             except Exception as e:
-                print(f"Error in handle_message: {str(e)}")
-                traceback.print_exc()
-
-        # Listen for messages
-        print(f"Starting message listener for {call_id}")
+                print(f"Error handling message: {e}")
+        
         async for data in websocket.iter_json():
-            print(f"Received data: {data}")
-            # Process each message in a separate task
-            asyncio.create_task(handle_message(data))
-
+            await handle_message(data)
     except WebSocketDisconnect:
         print(f"WebSocket disconnected for call {call_id}")
-        
     except ConnectionTimeoutError:
         print(f"Connection timeout for call {call_id}")
-        
     except Exception as e:
-        print(f"Error in WebSocket handler: {str(e)} for call {call_id}")
-        print("Detailed error information:")
-        traceback.print_exc()
-        try:
-            await websocket.close(1011, "Server error")
-        except:
-            pass
-            
+        print(f"WebSocket error for call {call_id}: {e}")
+        await websocket.close(1011, "Server error")
     finally:
         print(f"WebSocket connection closed for call {call_id}")

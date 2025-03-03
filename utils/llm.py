@@ -1,23 +1,22 @@
 from utils.config import begin_sentence, agent_prompt
 import os
 from openai import AsyncAzureOpenAI
-from custom_types import (
+from utils.custom_types import (
     ResponseRequiredRequest,
     ResponseResponse,
     Utterance,
 )
 from typing import List
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
-
-openai_api_key = os.getenv("OPENAI_API_KEY")
 
 class LLMClient:
     def __init__(self):
         self.client = AsyncAzureOpenAI(
-            api_key=openai_api_key,
-            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
+            azure_endpoint=os.getenv("AZURE_API_BASE"),
             api_version=os.getenv("AZURE_API_VERSION"),
         )
 
@@ -50,24 +49,50 @@ class LLMClient:
 
     async def draft_response(self, request: ResponseRequiredRequest):
         prompt = self.prepare_prompt(request)
-        stream = await self.client.chat.completions.create(
-            model="gpt-4o", 
-            messages=prompt,
-            stream=True,
-        )
+        print(f"Sending prompt with {len(prompt)} messages")
+        
+        try:
+            # Create the streaming request
+            stream = await self.client.chat.completions.create(
+                model="gpt-4o", 
+                messages=prompt,
+                stream=True,
+            )
 
-        async for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                yield ResponseResponse(
-                    response_id=request.response_id,
-                    content=chunk.choices[0].delta.content,
-                    content_complete=False,
-                    end_call=False,
-                )
-
-        yield ResponseResponse(
-            response_id=request.response_id,
-            content="",
-            content_complete=True,
-            end_call=False,
-        )
+            # Process the stream
+            async for chunk in stream:                
+                # Skip chunks with empty choices (likely metadata/control chunks)
+                if not chunk.choices:
+                    continue
+                    
+                # Process content chunks
+                if chunk.choices[0].delta and chunk.choices[0].delta.content is not None:
+                    print(f"Content chunk received: {chunk.choices[0].delta.content}")
+                    yield ResponseResponse(
+                        response_id=request.response_id,
+                        content=chunk.choices[0].delta.content,
+                        content_complete=False,
+                        end_call=False,
+                    )
+                else:
+                    continue            
+            # Signal that we've completed streaming
+            print("Stream completed, sending content_complete=True")
+            yield ResponseResponse(
+                response_id=request.response_id,
+                content="",
+                content_complete=True,
+                end_call=False,
+            )
+        except Exception as e:
+            print(f"Error in draft_response: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            # Provide a fallback response in case of errors
+            yield ResponseResponse(
+                response_id=request.response_id,
+                content="I'm sorry, I'm having trouble at the moment. Please try again.",
+                content_complete=True,
+                end_call=False,
+            )
