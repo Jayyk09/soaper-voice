@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from concurrent.futures import TimeoutError as ConnectionTimeoutError
 from pydantic import BaseModel
 from retell import Retell
-from utils.custom_types import ConfigResponse, ResponseRequiredRequest, ResponseResponse
+from utils.custom_types import ConfigResponse, ResponseRequiredRequest, ResponseResponse, Utterance
 from utils.llm import LLMClient
 from typing import List, Optional, Tuple
 import asyncio
@@ -249,7 +249,3 @@ async def websocket_handler(websocket: WebSocket, call_id: str):
             
     finally:
         print(f"WebSocket connection closed for call {call_id}")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)

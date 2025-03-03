@@ -16,12 +16,26 @@ azureLLM = LLM(
 )
 
 from pydantic import BaseModel, Field
+from typing import Dict, Any, Optional
+
+class CallerInfo(BaseModel):
+    name: Optional[str] = None
+    preferred_date: Optional[str] = None
+    preferred_time: Optional[str] = None
 
 class ReceptionistResponse(BaseModel):
     response: str = Field(description="The response to provide to the caller")
+    extracted_info: Optional[CallerInfo] = Field(
+        default=None, 
+        description="Information extracted from the conversation"
+    )
 
 class AppointmentResponse(BaseModel):
     response: str = Field(description="The full response to provide to the caller")
+    updated_info: Optional[CallerInfo] = Field(
+        default=None, 
+        description="Updated caller information after this interaction"
+    )
 
 @CrewBase
 class MedicalOfficeVoiceApp:
@@ -95,11 +109,13 @@ if __name__ == "__main__":
         # Simple test with a basic input
         print("Testing crew with a basic input...")
         result = crew.kickoff(inputs={
-            "conversation_context": "Caller: I'd like to know your office hours.\n",
-            "last_user_message": "I'd like to know your office hours."
+            "conversation_context": "Caller: I'd like to book an appointment.\n\nJoann: I'd be happy to help you book an appointment. May I have your full name, please?\n\nCaller: My name is John Smith.\n",
+            "last_user_message": "My name is John Smith.",
+            "caller_info": {"name": "John Smith"}
         })
         
         print("type of result:", type(result) )
+        print("result:", result)
         
     except Exception as e:
         import traceback

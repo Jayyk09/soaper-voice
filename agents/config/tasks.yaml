@@ -1,19 +1,35 @@
 assess_request:
   description: >
-    Determine what the caller needs and provide a helpful response.
+    Analyze the ENTIRE conversation history to determine what the caller needs.
+    Pay close attention to information the caller has already provided, such as their name,
+    date of birth, preferred appointment times, or reason for visit. Never ask for 
+    information that has already been given in the conversation.
+    
     If they need general information about the practice, services, or have 
     general questions, provide that information directly.
-    If they want to book an appointment, acknowledge this and indicate it.
+    
+    If they want to book an appointment, acknowledge this and pass to the appointment specialist
+    with all information already collected.
   expected_output: >
-    A clear response to the caller that addresses their needs.
+    A natural, conversational response that addresses the caller's needs without
+    repeating requests for information they've already provided.
   agent: receptionist
   
 handle_appointment:
   description: >
-    The caller wants to book a doctor's appointment. Collect all required information:
-    full name, date of birth, preferred date and time, reason for visit, insurance 
-    information, and contact number. After collecting all information, 
-    provide a confirmation summary and any preparation instructions.
+    The caller wants to book a doctor's appointment. First, CAREFULLY REVIEW the entire
+    conversation_context to identify what information has already been provided:
+    - Patient's name
+    - Preferred date 
+    - Preferred time
+    
+    Ask for ONLY ONE missing piece of information at a time. NEVER ask for information
+    that was already given in previous messages. Speak naturally without templates or
+    numbered lists.
+    
+    After collecting all required information, provide a confirmation summary with the
+    specific details the caller provided.
   expected_output: >
-    Complete appointment details and confirmation information.
+    A natural response that acknowledges information already provided and only asks
+    for one missing piece of information, or confirms the appointment with all details.
   agent: appointment_specialist
