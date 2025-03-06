@@ -57,11 +57,11 @@ async def handle_webhook(request: Request):
             )
             return JSONResponse(status_code=401, content={"message": "Unauthorized"})
         if post_data["event"] == "call_started":
-            print("Call started event", post_data['call']['from_number'])
+            print("Call started event", post_data['call'])
         elif post_data["event"] == "call_ended":
             print("Call ended event", post_data)
         elif post_data["event"] == "call_analyzed":
-            print("Call analyzed event", post_data['call'])
+            print("Call analyzed event", post_data['call']['call_analysis']['custom_analysis_data'])
 
         else:
             print("Unknown event", post_data["event"])
