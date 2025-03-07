@@ -62,13 +62,13 @@ class LLMClient:
                 "type": "function",
                 "function": {
                     "name": "book_appointment",
-                    "description": "Book an appointment with a doctor after collecting all required information.",
+                    "description": "Book an appointment with a doctor after collecting all required information. When getting the doctor's name, remove the title (Dr., Dr. Dr., Dr. Dr. Dr., etc.)",
                     "parameters": {
                         "type": "object",
                         "properties": {  # This "properties" key was missing
                             "first_name": {
                                 "type": "string",
-                                "description": "Patient's first name",
+                                "description": "Patient's first name.",
                             },
                             "last_name": {
                                 "type": "string",
@@ -82,16 +82,20 @@ class LLMClient:
                                 "type": "string",
                                 "description": "Appointment time in HH:MM format (24-hour)",
                             },
-                            "doctor_name": {
+                            "doctor_fname": {
                                 "type": "string",
-                                "description": "Name of the doctor to book with",
+                                "description": "Name of the doctor to book with. Confirm it by asking the spelling if needed",
+                            },
+                            "doctor_lname": {
+                                "type": "string",
+                                "description": "Last name of the doctor to book with. Confirm it by asking the spelling if needed",
                             },
                             "reason": {
                                 "type": "string",
                                 "description": "Brief reason for the appointment",
                             },
                         },
-                        "required": ["first_name", "last_name", "date", "time", "doctor_name", "reason"],
+                        "required": ["first_name", "last_name", "date", "time", "doctor_fname", "doctor_lname", "reason"],
                     },
                 },
             },
@@ -234,36 +238,35 @@ class LLMClient:
             # 1. Format the data as expected by your API
             # 2. Make the API request using aiohttp or similar
             # 3. Parse and return the response
+            import aiohttp
             
             # Simulate API call (replace with actual implementation)
-            import random
+            async with aiohttp.ClientSession() as session:
+                async with session.post("http://localhost:3001/check_availability", json=appointment_data) as response:
+                    response_data = await response.json()
+                                        
+                    if response_data.get("status") == "success" and response_data.get("available", False):
+                        return {
+                            "status": "success",
+                            "message": "Appointment booked successfully"
+                        }
+                    elif response_data.get("status") == "success" and not response_data.get("available", True):
+                        return {
+                            "status": "error",
+                            "error_code": "TIME_NOT_AVAILABLE",
+                            "message": response_data.get("message", "The requested time is not available")
+                        }
+                    else:
+                        return {
+                            "status": "error",
+                            "error_code": "DOCTOR_NOT_AVAILABLE",
+                            "message": response_data.get("message", "The requested doctor is not available")
+                        }
             
-            # Simulate different response types for demonstration
-            response_type = random.choice(["success", "doctor_not_available", "time_not_available"])
-            
-            if response_type == "success":
-                return {
-                    "status": "success",
-                    "appointment_id": f"APT-{random.randint(10000, 99999)}",
-                    "message": "Appointment booked successfully"
-                }
-            elif response_type == "doctor_not_available":
-                return {
-                    "status": "error",
-                    "error_code": "DOCTOR_NOT_AVAILABLE",
-                    "message": "The doctor is not available at this time"
-                }
-            else:
-                return {
-                    "status": "error",
-                    "error_code": "TIME_NOT_AVAILABLE",
-                    "message": "The requested time slot is not available"
-                }
-                
         except Exception as e:
             print(f"Error calling booking API: {str(e)}")
             return {
                 "status": "error",
                 "error_code": "API_ERROR",
-                "message": "There was a problem connecting to the booking service"
+                "message": f"There was a problem connecting to the booking service: {str(e)}"
             }

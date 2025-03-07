@@ -77,6 +77,7 @@ async def websocket_handler(websocket: WebSocket, call_id: str):
     """Handles real-time communication with Retell's server over WebSocket."""
     try:
         await websocket.accept()
+        
         llm_client = LLMClient()
         
         # Send initial configuration
@@ -87,6 +88,7 @@ async def websocket_handler(websocket: WebSocket, call_id: str):
         ).__dict__)
         
         async def handle_message(request_json):
+            heartbeat_task = asyncio.create_task(send_heartbeats(websocket))
             try:
                 if websocket.client_state != WebSocketState.CONNECTED:
                     print("WebSocket disconnected.")
@@ -113,6 +115,22 @@ async def websocket_handler(websocket: WebSocket, call_id: str):
                             break
             except Exception as e:
                 print(f"Error handling message: {e}")
+            finally:
+                heartbeat_task.cancel()
+                
+        async def send_heartbeats(websocket: WebSocket):
+            """Send periodic pings to keep the connection alive."""
+            try:
+                while True:
+                    await asyncio.sleep(15)  # Send heartbeat every 15 seconds
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json({"response_type": "ping_pong", "timestamp": int(time.time() * 1000)})
+            except asyncio.CancelledError:
+                # Task was cancelled, clean up
+                pass
+            except Exception as e:
+                print(f"Error in heartbeat: {e}")
+
         
         async for data in websocket.iter_json():
             await handle_message(data)
