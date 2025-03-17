@@ -10,7 +10,7 @@ from typing import List
 from dotenv import load_dotenv
 import asyncio
 import json
-
+import aiohttp
 load_dotenv()
 
 class LLMClient:
@@ -222,51 +222,41 @@ class LLMClient:
 
     async def book_appointment(self, appointment_data):
         """
-        Make API call to booking service
+        Make API call to patient verification service
         
         Args:
-            appointment_data: Dictionary containing appointment details
+            patient_data (dict): Dictionary containing patient details (first_name, last_name, date_of_birth)
             
         Returns:
             dict: API response with status and any error information
         """
+        url = "https://ep.soaper.ai/api/v1/agent/patients/verify"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        }
+
         try:
-            # This is where you would make the actual API call
-            # For demonstration, simulating API response
-            
-            # In a real implementation, you would:
-            # 1. Format the data as expected by your API
-            # 2. Make the API request using aiohttp or similar
-            # 3. Parse and return the response
-            import aiohttp
-            
-            # Simulate API call (replace with actual implementation)
             async with aiohttp.ClientSession() as session:
-                async with session.post("http://localhost:3001/check_availability", json=appointment_data) as response:
+                async with session.post(url, json=appointment_data, headers=headers) as response:
                     response_data = await response.json()
-                                        
-                    if response_data.get("status") == "success" and response_data.get("available", False):
+                    
+                    if response_data.get("success", False) and response_data.get("verified", False):
                         return {
                             "status": "success",
-                            "message": "Appointment booked successfully"
-                        }
-                    elif response_data.get("status") == "success" and not response_data.get("available", True):
-                        return {
-                            "status": "error",
-                            "error_code": "TIME_NOT_AVAILABLE",
-                            "message": response_data.get("message", "The requested time is not available")
+                            "message": "Patient verified successfully"
                         }
                     else:
                         return {
                             "status": "error",
-                            "error_code": "DOCTOR_NOT_AVAILABLE",
-                            "message": response_data.get("message", "The requested doctor is not available")
+                            "error_code": "PATIENT_NOT_FOUND",
+                            "message": response_data.get("message", "Patient not found")
                         }
-            
+        
         except Exception as e:
-            print(f"Error calling booking API: {str(e)}")
+            print(f"Error calling patient verification API: {str(e)}")
             return {
                 "status": "error",
                 "error_code": "API_ERROR",
-                "message": f"There was a problem connecting to the booking service: {str(e)}"
+                "message": f"There was a problem connecting to the verification service: {str(e)}"
             }
