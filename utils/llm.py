@@ -277,7 +277,7 @@ class LLMClient:
                         slots_data = {
                             "patient_id": LLMClient.patient_id,
                             "physician_id": LLMClient.physician_id,
-                            "date": appointment_date
+                            "appointment_date": appointment_date
                         }
                         
                         slots_result = await self.get_doctor_time_slots(slots_data)
@@ -300,15 +300,16 @@ class LLMClient:
                         # Format time slots for display
                         slot_options = []
                         for i, slot in enumerate(slots[:5], 1):  # Limit to first 5 slots
-                            # Make sure we're handling the time format consistently
-                            slot_time = slot.get("time")
+                            # Extract datetime and format it
+                            slot_datetime = slot.get("datetime")
+                            slot_time = slot_datetime.split("T")[1]  # Extract time part
                             # Store the slot with its index for easier reference
                             formatted_slot = {"index": i, "time": slot_time}
                             slot_options.append(f"{i}. {slot_time}")
                             
                         # Store available slots with their indices
                         LLMClient.available_slots = [
-                            {"index": i, "time": slot.get("time")} 
+                            {"index": i, "time": slot.get("datetime").split("T")[1]} 
                             for i, slot in enumerate(slots[:5], 1)
                         ]
                         

@@ -5,7 +5,7 @@ import json
 import re
 from typing import List, Dict, Any, AsyncGenerator
 from utils.custom_types import ResponseRequiredRequest, ResponseResponse, Utterance
-from agents.crew import MedicalOfficeVoiceApp, fallback_response
+from crewai_agents.crew import MedicalOfficeVoiceApp, fallback_response
 
 
 # Load environment variables from .env file
