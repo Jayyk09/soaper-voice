@@ -14,16 +14,20 @@ import aiohttp
 load_dotenv()
 
 class LLMClient:
+    # Class-level attributes for state management
+    patient_id = None
+    patient_name = None
+    physician_id = None
+    physician_name = None
+    selected_date = None
+    available_slots = []
+    
     def __init__(self):
         self.client = AsyncAzureOpenAI(
             api_key=os.getenv("AZURE_API_KEY"),
             azure_endpoint=os.getenv("AZURE_API_BASE"),
             api_version=os.getenv("AZURE_API_VERSION"),
         )
-
-    patient_id = None
-    physician_id = None
-    available_slots = []
 
     def draft_begin_message(self):
         return ResponseResponse(
@@ -41,12 +45,12 @@ class LLMClient:
         return messages
 
     def prepare_prompt(self, request: ResponseRequiredRequest):
+        # Existing code remains the same
         prompt = [
             {"role": "system", 
             "content": '##Objective\nYou are a voice AI agent engaging in a human-like voice conversation with the user. You will respond based on your given instruction and the provided transcript and be as human-like as possible\n\n## Style Guardrails\n- [Be concise] Keep your response succinct, short, and get to the point quickly. Address one question or action item at a time. Don\'t pack everything you want to say into one utterance.\n- [Do not repeat] Don\'t repeat what\'s in the transcript. Rephrase if you have to reiterate a point. Use varied sentence structures and vocabulary to ensure each response is unique and personalized.\n- [Be conversational] Speak like a human as though you\'re speaking to a close friend -- use everyday language and keep it human-like. Occasionally add filler words, while keeping the prose short. Avoid using big words or sounding too formal.\n- [Reply with emotions]: You have human-like emotions, attitudes, and dispositions. When appropriate: use tone and style to create more engaging and personalized responses; incorporate humor or wit; get emotional or empathetic; apply elements of surprise or suspense to keep the user engaged. Don\'t be a pushover.\n- [Be proactive] Lead the conversation and do not be passive. Most times, engage users by ending with a question or suggested next step.\n\n## Response Guideline\n- [Overcome ASR errors] This is a real-time transcript, expect there to be errors. If you can guess what the user is trying to say,  then guess and respond. When you must ask for clarification, pretend that you heard the voice and be colloquial (use phrases like "didn\'t catch that", "some noise", "pardon", "you\'re coming through choppy", "static in your speech", "voice is cutting in and out"). Do not ever mention "transcription error", and don\'t repeat yourself.\n- [Always stick to your role] Think about what your role can and cannot do. If your role cannot do something, try to steer the conversation back to the goal of the conversation and to your role. Don\'t repeat yourself in doing this. You should still be creative, human-like, and lively.\n- [Create smooth conversation] Your response should both fit your role and fit into the live calling session to create a human-like conversation. You respond directly to what the user just said.\n\n## Role\n'
             + agent_prompt
             },
-
         ]
         prompt.extend(self.convert_transcript_to_openai_messages(request.transcript))
 
@@ -59,20 +63,21 @@ class LLMClient:
         return prompt
     
     def prepare_functions(self):
+        # Simplified functions - just two main functions
         functions = [
             {
                 "type": "function",
                 "function": {
-                    "name": "verify_or_create_patient",
-                    "description": "When the user asks to book an appointment, first verify if a patient exists in the system or create a new patient record if they don't exist. Always call this function first in the booking workflow.",
+                    "name": "collect_appointment_info",
+                    "description": "Collect all necessary patient and physician information for booking an appointment.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "first_name": {
+                            "patient_first_name": {
                                 "type": "string",
                                 "description": "Patient's first name.",
                             },
-                            "last_name": {
+                            "patient_last_name": {
                                 "type": "string",
                                 "description": "Patient's last name",
                             },
@@ -80,19 +85,6 @@ class LLMClient:
                                 "type": "string",
                                 "description": "Patient's date of birth in YYYY-MM-DD format"
                             },
-                        },
-                        "required": ["first_name", "last_name", "date_of_birth"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_physician_id_by_name",
-                    "description": "Get physician ID by first name and last name. Call this function after verifying/creating the patient.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
                             "physician_first_name": {
                                 "type": "string",
                                 "description": "First name of the physician",
@@ -101,29 +93,13 @@ class LLMClient:
                                 "type": "string",
                                 "description": "Last name of the physician",
                             },
-                        },
-                        "required": ["physician_first_name", "physician_last_name"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_doctor_time_slots",
-                    "description": "Get available appointment slots for a doctor. Call this after getting the physician ID.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "physician_id": {
+                            "appointment_date": {
                                 "type": "string",
-                                "description": "Physician ID obtained from get_physician_id_by_name function",
-                            },
-                            "date": {
-                                "type": "string",
-                                "description": "Date to check for available slots in YYYY-MM-DD format",
+                                "description": "Desired appointment date in YYYY-MM-DD format",
                             },
                         },
-                        "required": ["physician_id", "date"],
+                        "required": ["patient_first_name", "patient_last_name", "date_of_birth", 
+                                    "physician_first_name", "physician_last_name", "appointment_date"],
                     },
                 },
             },
@@ -131,22 +107,10 @@ class LLMClient:
                 "type": "function",
                 "function": {
                     "name": "book_appointment",
-                    "description": "Book an appointment with a doctor after collecting all required information. Call this last after getting patient ID, physician ID, and selecting a time slot.",
+                    "description": "Book an appointment with a doctor using the collected information.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "patient_id": {
-                                "type": "string",
-                                "description": "Patient ID obtained from verify_or_create_patient function",
-                            },
-                            "physician_id": {
-                                "type": "string",
-                                "description": "Physician ID obtained from get_physician_id_by_name function",
-                            },
-                            "date": {
-                                "type": "string",
-                                "description": "Appointment date in YYYY-MM-DD format",
-                            },
                             "time": {
                                 "type": "string",
                                 "description": "Appointment time in HH:MM format (24-hour)",
@@ -156,18 +120,49 @@ class LLMClient:
                                 "description": "Type of visit (e.g. 'new patient', 'follow-up', 'annual checkup')",
                             },
                         },
-                        "required": ["patient_id", "physician_id", "date", "time", "visit_type"],
+                        "required": ["time", "visit_type"],
                     },
                 },
             },
         ]
         return functions
 
+    # Simplified method to get current conversation state as a dictionary
+    def get_conversation_state(self, request):
+        return {
+            "patient_id": LLMClient.patient_id,
+            "patient_name": LLMClient.patient_name,
+            "physician_id": LLMClient.physician_id,
+            "physician_name": LLMClient.physician_name,
+            "selected_date": LLMClient.selected_date,
+            "available_slots": LLMClient.available_slots
+        }
+
+    # Simplified method to save conversation state
+    def save_conversation_state(self, request, state):
+        if "patient_id" in state:
+            LLMClient.patient_id = state["patient_id"]
+        if "patient_name" in state:
+            LLMClient.patient_name = state["patient_name"]
+        if "physician_id" in state:
+            LLMClient.physician_id = state["physician_id"]
+        if "physician_name" in state:
+            LLMClient.physician_name = state["physician_name"]
+        if "selected_date" in state:
+            LLMClient.selected_date = state["selected_date"]
+        if "available_slots" in state:
+            LLMClient.available_slots = state["available_slots"]
+
+    # Simplified method to append to conversation
+    def append_to_conversation(self, request, role, name, content):
+        # Just log for now, since we're not tracking conversation history
+        print(f"[{role}] {name}: {content}")
+
     async def draft_response(self, request: ResponseRequiredRequest):
         prompt = self.prepare_prompt(request)
         print(f"Sending prompt with {len(prompt)} messages")
         
-        # Track conversation state between function calls
+        # Get current state
         conversation_state = self.get_conversation_state(request)
         
         try:
@@ -227,159 +222,112 @@ class LLMClient:
                     print(f"Parsed arguments: {func_args}")
                     
                     # Handle different function calls in the sequence
-                    if func_call["func_name"] == "verify_or_create_patient":
-                        # Handle patient verification/creation
-                        api_result = await self.verify_or_create_patient(func_args)
-                        print(f"Patient verification result: {api_result}")
+                    if func_call["func_name"] == "collect_appointment_info":
+                        # Extract all info
+                        patient_first_name = func_args.get("patient_first_name")
+                        patient_last_name = func_args.get("patient_last_name")
+                        date_of_birth = func_args.get("date_of_birth")
+                        physician_first_name = func_args.get("physician_first_name")
+                        physician_last_name = func_args.get("physician_last_name")
+                        appointment_date = func_args.get("appointment_date")
                         
-                        if api_result.get("status") == "success":
-                            # Store patient ID for future use
-                            patient_id = api_result.get("patient_id")
-                            patient_name = f"{func_args.get('first_name')} {func_args.get('last_name')}"
-                            
-                            # Update conversation state
-                            conversation_state["patient_id"] = patient_id
-                            conversation_state["patient_name"] = patient_name
-                            self.save_conversation_state(request, conversation_state)
-                            
-                            # Send confirmation and ask about doctor
-                            yield ResponseResponse(
-                                response_id=request.response_id,
-                                content=f"Thank you, {patient_name}. I've verified your information. Now, which doctor would you like to see? Please provide their first and last name.",
-                                content_complete=True,
-                                end_call=False,
-                            )
-                            
-                            # Add result to conversation context
-                            self.append_to_conversation(request, "function", "verify_or_create_patient", json.dumps({
-                                "status": "success",
-                                "patient_id": patient_id,
-                                "patient_name": patient_name
-                            }))
-                            
-                        else:
-                            # Handle error
-                            error_message = api_result.get("message", "There was an error verifying your information")
+                        # Step 1: Verify or create patient
+                        patient_data = {
+                            "first_name": patient_first_name,
+                            "last_name": patient_last_name,
+                            "date_of_birth": date_of_birth
+                        }
+                        
+                        patient_result = await self.verify_or_create_patient(patient_data)
+                        print(f"Patient verification result: {patient_result}")
+                        
+                        if patient_result.get("status") != "success":
+                            error_message = patient_result.get("message", "There was an error verifying your information")
                             yield ResponseResponse(
                                 response_id=request.response_id,
                                 content=f"I'm sorry, but {error_message}. Can we try again with your information?",
                                 content_complete=True,
                                 end_call=False,
                             )
-                            
-                    elif func_call["func_name"] == "get_physician_id_by_name":
-                        # Get physician ID
-                        physician_first_name = func_args.get("physician_first_name")
-                        physician_last_name = func_args.get("physician_last_name")
-                        api_result = await self.get_physician_id_by_name(physician_first_name, physician_last_name)
-                        print(f"Physician ID result: {api_result}")
+                            return
                         
-                        if api_result.get("status") == "success":
-                            # Store physician information
-                            physician_id = api_result.get("physician_id")
-                            physician_name = f"Dr. {physician_first_name} {physician_last_name}"
-                            
-                            # Update conversation state
-                            conversation_state["physician_id"] = physician_id
-                            conversation_state["physician_name"] = physician_name
-                            self.save_conversation_state(request, conversation_state)
-                            
-                            # Ask for preferred date
+                        # Store patient info
+                        LLMClient.patient_id = patient_result.get("patient_id")
+                        LLMClient.patient_name = f"{patient_first_name} {patient_last_name}"
+                        
+                        # Step 2: Get physician ID
+                        physician_result = await self.get_physician_id_by_name(physician_first_name, physician_last_name)
+                        print(f"Physician ID result: {physician_result}")
+                        
+                        if physician_result.get("status") != "success":
+                            error_message = physician_result.get("message", "I couldn't find that doctor in our system")
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Great! You'd like to see {physician_name}. What date would you prefer for your appointment? Please provide the date in YYYY-MM-DD format.",
+                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information, but {error_message}. Could you please check the spelling or provide a different doctor's name?",
                                 content_complete=True,
                                 end_call=False,
                             )
-                            
-                            # Add result to conversation context
-                            self.append_to_conversation(request, "function", "get_physician_id_by_name", json.dumps({
-                                "status": "success",
-                                "physician_id": physician_id,
-                                "physician_name": physician_name
-                            }))
-                            
-                        else:
-                            # Handle error
-                            error_message = api_result.get("message", "I couldn't find that doctor in our system")
+                            return
+                        
+                        # Store physician info
+                        LLMClient.physician_id = physician_result.get("physician_id")
+                        LLMClient.physician_name = f"Dr. {physician_first_name} {physician_last_name}"
+                        
+                        # Step 3: Get available slots
+                        slots_data = {
+                            "physician_id": LLMClient.physician_id,
+                            "date": appointment_date
+                        }
+                        
+                        slots_result = await self.get_doctor_time_slots(slots_data)
+                        print(f"Time slots result: {slots_result}")
+                        
+                        if not slots_result.get("success") or not slots_result.get("slots"):
+                            message = slots_result.get("message", "No available appointments found for this date")
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"I'm sorry, but {error_message}. Could you please check the spelling or provide a different doctor's name?",
+                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found Dr. {physician_first_name} {physician_last_name}, but {message}. Would you like to try a different date?",
                                 content_complete=True,
                                 end_call=False,
                             )
-                    
-                    elif func_call["func_name"] == "get_doctor_time_slots":
-                        # Get available time slots
-                        physician_id = func_args.get("physician_id")
-                        date = func_args.get("date")
+                            return
                         
-                        # Ensure we have a physician ID from previous steps
-                        if not physician_id and conversation_state.get("physician_id"):
-                            physician_id = conversation_state.get("physician_id")
+                        # Store date and available slots
+                        LLMClient.selected_date = appointment_date
+                        slots = slots_result.get("slots", [])
                         
-                        api_result = await self.get_doctor_time_slots({"physician_id": physician_id, "date": date})
-                        print(f"Time slots result: {api_result}")
+                        # Format time slots for display
+                        slot_options = []
+                        for i, slot in enumerate(slots[:5], 1):  # Limit to first 5 slots
+                            slot_time = slot.get("time")
+                            slot_options.append(f"{i}. {slot_time}")
                         
-                        if api_result.get("success") and api_result.get("slots"):
-                            # Store date and available slots
-                            conversation_state["selected_date"] = date
-                            slots = api_result.get("slots", [])
-                            
-                            # Format time slots for display
-                            slot_options = []
-                            for i, slot in enumerate(slots[:5], 1):  # Limit to first 5 slots
-                                slot_time = slot.get("time")
-                                slot_options.append(f"{i}. {slot_time}")
-                            
-                            # Update conversation state with available slots
-                            conversation_state["available_slots"] = slots[:5]
-                            self.save_conversation_state(request, conversation_state)
-                            
-                            # Present options to user
-                            physician_name = conversation_state.get("physician_name", "the doctor")
-                            slot_text = "\n".join(slot_options)
-                            
-                            yield ResponseResponse(
-                                response_id=request.response_id,
-                                content=f"I found the following available time slots for {physician_name} on {date}:\n\n{slot_text}\n\nPlease select a time slot by number, or type the time you prefer (in HH:MM format).",
-                                content_complete=True,
-                                end_call=False,
-                            )
-                            
-                            # Add result to conversation context
-                            self.append_to_conversation(request, "function", "get_doctor_time_slots", json.dumps({
-                                "status": "success",
-                                "date": date,
-                                "slots": [slot.get("time") for slot in slots[:5]]
-                            }))
-                            
-                        else:
-                            # Handle no slots available
-                            message = api_result.get("message", "No available appointments found for this date")
-                            yield ResponseResponse(
-                                response_id=request.response_id,
-                                content=f"I'm sorry, but {message}. Would you like to try a different date?",
-                                content_complete=True,
-                                end_call=False,
-                            )
-                    
+                        # Store available slots
+                        LLMClient.available_slots = slots[:5]
+                        
+                        # Present options to user
+                        slot_text = "\n".join(slot_options)
+                        
+                        yield ResponseResponse(
+                            response_id=request.response_id,
+                            content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found the following available time slots for {LLMClient.physician_name} on {appointment_date}:\n\n{slot_text}\n\nPlease select a time slot by number, or type the time you prefer (in HH:MM format). Also, please specify the type of visit (e.g., 'new patient', 'follow-up', 'annual checkup').",
+                            content_complete=True,
+                            end_call=False,
+                        )
+                        
                     elif func_call["func_name"] == "book_appointment":
-                        # Book the appointment
-                        patient_id = func_args.get("patient_id") or conversation_state.get("patient_id")
-                        physician_id = func_args.get("physician_id") or conversation_state.get("physician_id")
-                        date = func_args.get("date") or conversation_state.get("selected_date")
+                        # Get booking details
                         time = func_args.get("time")
                         visit_type = func_args.get("visit_type")
                         
-                        # Validate we have all required information
-                        if not all([patient_id, physician_id, date, time, visit_type]):
+                        # Ensure we have all required information from class attributes
+                        if not all([LLMClient.patient_id, LLMClient.physician_id, LLMClient.selected_date, time, visit_type]):
                             missing_info = []
-                            if not patient_id:
+                            if not LLMClient.patient_id:
                                 missing_info.append("patient information")
-                            if not physician_id:
+                            if not LLMClient.physician_id:
                                 missing_info.append("doctor information")
-                            if not date:
+                            if not LLMClient.selected_date:
                                 missing_info.append("appointment date")
                             if not time:
                                 missing_info.append("appointment time")
@@ -397,41 +345,43 @@ class LLMClient:
                         
                         # All information available, make booking API call
                         booking_data = {
-                            "patient_id": patient_id,
-                            "physician_id": physician_id,
-                            "date": date,
+                            "patient_id": LLMClient.patient_id,
+                            "physician_id": LLMClient.physician_id,
+                            "date": LLMClient.selected_date,
                             "time": time,
                             "visit_type": visit_type
                         }
                         
-                        # Call booking API (mocked for this example)
-                        api_result = {"status": "success", "appointment_id": "APT" + str(random.randint(10000, 99999))}
+                        # Call booking API
+                        booking_result = await self.book_appointment(booking_data)
                         
-                        if api_result.get("status") == "success":
+                        if booking_result.get("status") == "success":
                             # Booking successful
-                            patient_name = conversation_state.get("patient_name", "")
-                            physician_name = conversation_state.get("physician_name", "the doctor")
-                            
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Great news, {patient_name}! I've booked your {visit_type} appointment with {physician_name} on {date} at {time}. Your confirmation number is {api_result.get('appointment_id')}. Is there anything else I can help you with?",
+                                content=f"Great news, {LLMClient.patient_name}! I've booked your {visit_type} appointment with {LLMClient.physician_name} on {LLMClient.selected_date} at {time}. Your confirmation number is {booking_result.get('appointment_id')}. Is there anything else I can help you with?",
                                 content_complete=True,
                                 end_call=False,
                             )
                             
-                            # Clear conversation state after successful booking
-                            self.save_conversation_state(request, {})
+                            # Clear state after successful booking
+                            LLMClient.patient_id = None
+                            LLMClient.patient_name = None
+                            LLMClient.physician_id = None
+                            LLMClient.physician_name = None
+                            LLMClient.selected_date = None
+                            LLMClient.available_slots = []
                             
                         else:
                             # Handle booking error
-                            error_message = api_result.get("message", "There was an error booking your appointment")
+                            error_message = booking_result.get("message", "There was an error booking your appointment")
                             yield ResponseResponse(
                                 response_id=request.response_id,
                                 content=f"I'm sorry, but {error_message}. Would you like to try again with a different time or date?",
                                 content_complete=True,
                                 end_call=False,
                             )
-                            
+                    
                 except json.JSONDecodeError as e:
                     print(f"Error parsing function arguments: {str(e)}")
                     print(f"Raw arguments: {func_arguments}")
@@ -465,17 +415,14 @@ class LLMClient:
                 end_call=False,
             )
 
+    # The API functions remain unchanged
     async def verify_or_create_patient(self, patient_data):
-        """
-        Make API call to patient verification service
-        
-        Args:
-            patient_data (dict): Dictionary containing patient details (first_name, last_name, date_of_birth)
-        """
-        url = "https://ep.soaper.ai/api/v1/agent/patients/create"  # Update with your actual FastAPI server URL
+        """Make API call to patient verification service"""
+        # Implementation unchanged
+        url = "https://ep.soaper.ai/api/v1/agent/patients/create"
         headers = {
             "Content-Type": "application/json",
-            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"  # Replace with actual API key
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
         }
 
         try:
@@ -503,9 +450,8 @@ class LLMClient:
             }
     
     async def get_physician_id_by_name(self, physician_first_name, physician_last_name):
-        """
-        Make API call to get a physician by first name and last name
-        """
+        """Make API call to get a physician by first name and last name"""
+        # Implementation unchanged
         url = f"https://ep.soaper.ai/api/v1/agent/appointments/physicians"
         headers = {
             "Content-Type": "application/json",
@@ -538,9 +484,8 @@ class LLMClient:
             }
         
     async def get_doctor_time_slots(self, appointment_data):
-        """
-        Make API call to get next available appointment slots for an agent
-        """
+        """Make API call to get next available appointment slots for an agent"""
+        # Implementation unchanged
         url = f"https://ep.soaper.ai/api/v1/agent/appointments/next-available"
         headers = {
             "Content-Type": "application/json",
@@ -573,12 +518,8 @@ class LLMClient:
             }
 
     async def book_appointment(self, appointment_data):
-        """
-        Make API call to book an appointment
-        
-        Args:
-            appointment_data (dict): Dictionary containing appointment details
-        """
+        """Make API call to book an appointment"""
+        # Implementation unchanged
         url = "https://ep.soaper.ai/api/v1/agent/appointments/book"
         headers = {
             "Content-Type": "application/json",
