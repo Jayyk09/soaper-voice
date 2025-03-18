@@ -95,7 +95,7 @@ class LLMClient:
                             },
                             "appointment_date": {
                                 "type": "string",
-                                "description": "Desired appointment date in YYYY-MM-DD format",
+                                "description": "Desired appointment date in YYYY-MM-DD format. the year is 2025",
                             },
                         },
                         "required": ["patient_first_name", "patient_last_name", "date_of_birth", 
@@ -275,6 +275,7 @@ class LLMClient:
                         
                         # Step 3: Get available slots
                         slots_data = {
+                            "patient_id": LLMClient.patient_id,
                             "physician_id": LLMClient.physician_id,
                             "date": appointment_date
                         }
@@ -299,11 +300,17 @@ class LLMClient:
                         # Format time slots for display
                         slot_options = []
                         for i, slot in enumerate(slots[:5], 1):  # Limit to first 5 slots
+                            # Make sure we're handling the time format consistently
                             slot_time = slot.get("time")
+                            # Store the slot with its index for easier reference
+                            formatted_slot = {"index": i, "time": slot_time}
                             slot_options.append(f"{i}. {slot_time}")
-                        
-                        # Store available slots
-                        LLMClient.available_slots = slots[:5]
+                            
+                        # Store available slots with their indices
+                        LLMClient.available_slots = [
+                            {"index": i, "time": slot.get("time")} 
+                            for i, slot in enumerate(slots[:5], 1)
+                        ]
                         
                         # Present options to user
                         slot_text = "\n".join(slot_options)
@@ -319,6 +326,15 @@ class LLMClient:
                         # Get booking details
                         time = func_args.get("time")
                         visit_type = func_args.get("visit_type")
+                        
+                        # Check if time is a number (index) and convert to actual time
+                        if time and time.isdigit() and 1 <= int(time) <= len(LLMClient.available_slots):
+                            slot_index = int(time)
+                            # Find the slot with this index
+                            for slot in LLMClient.available_slots:
+                                if slot.get("index") == slot_index:
+                                    time = slot.get("time")
+                                    break
                         
                         # Ensure we have all required information from class attributes
                         if not all([LLMClient.patient_id, LLMClient.physician_id, LLMClient.selected_date, time, visit_type]):
