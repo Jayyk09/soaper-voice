@@ -61,11 +61,11 @@ class LLMClient:
             {
                 "type": "function",
                 "function": {
-                    "name": "book_appointment",
-                    "description": "Book an appointment with a doctor after collecting all required information. When getting the doctor's name, remove the title (Dr., Dr. Dr., Dr. Dr. Dr., etc.)",
+                    "name": "verify_or_create_patient",
+                    "description": "when the user asks to book an appointment, verify if a patient exists in the system or create a new patient record if they don't exist. Return the patient's ID in the response.",
                     "parameters": {
                         "type": "object",
-                        "properties": {  # This "properties" key was missing
+                        "properties": {
                             "first_name": {
                                 "type": "string",
                                 "description": "Patient's first name.",
@@ -73,6 +73,39 @@ class LLMClient:
                             "last_name": {
                                 "type": "string",
                                 "description": "Patient's last name",
+                            },
+                            "date_of_birth": {
+                                "type": "string",
+                                "description": "Patient's date of birth in YYYY-MM-DD format"
+                            },
+                            "doctor_fname": {
+                                "type": "string",
+                                "description": "Doctor's first name",
+                            },
+                            "doctor_lname": {
+                                "type": "string",
+                                "description": "Doctor's last name",
+                            },
+                        },
+                        "required": ["first_name", "last_name", "date_of_birth", "doctor_fname", "doctor_lname"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "book_appointment",
+                    "description": "Book an appointment with a doctor after collecting all required information and getting the patient's ID from verify_or_create_patient function. When getting the doctor's name, remove the title (Dr., Dr. Dr., Dr. Dr. Dr., etc.)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "patient_id": {
+                                "type": "string",
+                                "description": "Patient ID obtained from verify_or_create_patient function",
+                            },
+                            "physician_id": {
+                                "type": "string",
+                                "description": "Physician ID obtained from get_physician_id_by_name function",
                             },
                             "date": {
                                 "type": "string",
@@ -82,20 +115,16 @@ class LLMClient:
                                 "type": "string",
                                 "description": "Appointment time in HH:MM format (24-hour)",
                             },
-                            "doctor_fname": {
+                            "doctor_id": {
                                 "type": "string",
-                                "description": "Name of the doctor to book with. Confirm it by asking the spelling if needed",
+                                "description": "Doctor ID obtained from verify_or_create_doctor function",
                             },
-                            "doctor_lname": {
+                            "visit_type": {
                                 "type": "string",
-                                "description": "Last name of the doctor to book with. Confirm it by asking the spelling if needed",
-                            },
-                            "reason": {
-                                "type": "string",
-                                "description": "Brief reason for the appointment",
+                                "description": "Type of visit (e.g. 'new patient', 'follow-up', 'annual checkup')",
                             },
                         },
-                        "required": ["first_name", "last_name", "date", "time", "doctor_fname", "doctor_lname", "reason"],
+                        "required": ["patient_id", "date", "time", "doctor_fname", "doctor_lname", "reason"],
                     },
                 },
             },
@@ -156,56 +185,57 @@ class LLMClient:
             print(f"Streaming complete. Function call: {func_call}, Arguments collected: {func_arguments}")
 
             # Process function calls if present
-            if func_call and func_call["func_name"] == "book_appointment":
-                try:
-                    print("Parsing function arguments...")
-                    func_call["arguments"] = json.loads(func_arguments)
-                    print(f"Parsed arguments: {func_call['arguments']}")
-                    
-                    # Make API call to book appointment
-                    print("Calling booking API...")
-                    api_result = await self.book_appointment(func_call["arguments"])
-                    print(f"API result: {api_result}")
-                    
-                    # Generate response based on API result
-                    if api_result.get("status") == "success":
-                        doctor_name = func_call["arguments"].get("doctor_name", "the doctor")
-                        content = f"Great news! I've booked your appointment with Dr. {doctor_name} on {func_call['arguments']['date']} at {func_call['arguments']['time']}. Your confirmation number is {api_result.get('appointment_id')}. Is there anything else I can help with?"
-                    elif api_result.get("error_code") == "DOCTOR_NOT_AVAILABLE":
-                        content = f"I'm sorry, but Dr. {func_call['arguments'].get('doctor_name', 'the doctor')} is not available on {func_call['arguments']['date']} at {func_call['arguments']['time']}. Would you like to try a different time or date?"
-                    elif api_result.get("error_code") == "TIME_NOT_AVAILABLE":
-                        content = f"I'm sorry, but that time slot ({func_call['arguments']['time']} on {func_call['arguments']['date']}) is not available. Would you like to try a different time?"
-                    else:
-                        error_message = api_result.get("message", "There was an error booking your appointment")
-                        content = f"I'm sorry, but {error_message}. Would you like to try again?"
-                    
-                    print(f"Sending function response: {content}")
+            if func_call:
+                if func_call["func_name"] == "verify_or_create_patient":
+                    try:
+                        print("Parsing function arguments...")
+                        func_call["arguments"] = json.loads(func_arguments)
+                        print(f"Parsed arguments: {func_call['arguments']}")
+
+                        # Make API call to book appointment
+                        print("Calling booking API...")
+                        api_result = await self.verify_or_create_patient(func_call["arguments"])
+                        print(f"API result: {api_result}")
+                        
+                        # Generate response based on API result
+                        if api_result.get("status") == "success":
+                            doctor_name = func_call["arguments"].get("doctor_name", "the doctor")
+                            content = f"Great news! I've booked your appointment with Dr. {doctor_name} on {func_call['arguments']['date']} at {func_call['arguments']['time']}. Your confirmation number is {api_result.get('appointment_id')}. Is there anything else I can help with?"
+                        elif api_result.get("error_code") == "DOCTOR_NOT_AVAILABLE":
+                            content = f"I'm sorry, but Dr. {func_call['arguments'].get('doctor_name', 'the doctor')} is not available on {func_call['arguments']['date']} at {func_call['arguments']['time']}. Would you like to try a different time or date?"
+                        elif api_result.get("error_code") == "TIME_NOT_AVAILABLE":
+                            content = f"I'm sorry, but that time slot ({func_call['arguments']['time']} on {func_call['arguments']['date']}) is not available. Would you like to try a different time?"
+                        else:
+                            error_message = api_result.get("message", "There was an error booking your appointment")
+                            content = f"I'm sorry, but {error_message}. Would you like to try again?"
+                        
+                        print(f"Sending function response: {content}")
+                        response = ResponseResponse(
+                            response_id=request.response_id,
+                            content=content,
+                            content_complete=True,
+                            end_call=False,
+                        )
+                        yield response
+                    except json.JSONDecodeError as e:
+                        print(f"Error parsing function arguments: {str(e)}")
+                        print(f"Raw arguments: {func_arguments}")
+                        yield ResponseResponse(
+                            response_id=request.response_id,
+                            content="I'm sorry, I couldn't process your appointment request correctly. Let's try again. What date were you looking for?",
+                            content_complete=True,
+                            end_call=False,
+                        )
+                else:
+                    # No functions called, just complete the response
+                    print("No function called, completing response")
                     response = ResponseResponse(
                         response_id=request.response_id,
-                        content=content,
+                        content="",
                         content_complete=True,
                         end_call=False,
                     )
                     yield response
-                except json.JSONDecodeError as e:
-                    print(f"Error parsing function arguments: {str(e)}")
-                    print(f"Raw arguments: {func_arguments}")
-                    yield ResponseResponse(
-                        response_id=request.response_id,
-                        content="I'm sorry, I couldn't process your appointment request correctly. Let's try again. What date were you looking for?",
-                        content_complete=True,
-                        end_call=False,
-                    )
-            else:
-                # No functions called, just complete the response
-                print("No function called, completing response")
-                response = ResponseResponse(
-                    response_id=request.response_id,
-                    content="",
-                    content_complete=True,
-                    end_call=False,
-                )
-                yield response
 
         except Exception as e:
             print(f"Error in draft_response: {str(e)}")
@@ -219,6 +249,103 @@ class LLMClient:
                 content_complete=True,
                 end_call=False,
             )
+
+    async def verify_or_create_patient(self, patient_data):
+        """
+        Make API call to patient verification service
+        
+        Args:
+            patient_data (dict): Dictionary containing patient details (first_name, last_name, date_of_birth)
+        """
+        url = "https://ep.soaper.ai/api/v1/agent/patients/create"  # Update with your actual FastAPI server URL
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"  # Replace with actual API key
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=patient_data, headers=headers) as response:
+                    response_data = await response.json()
+                    
+                    if response_data.get("success", False):
+                        return {
+                            "status": "success",
+                            "message": response_data.get("message"),
+                            "patient_id": response_data.get("patient", {}).get("id")
+                        }
+                    else:
+                        return {
+                            "status": "error",
+                            "message": response_data.get("message", "Error creating patient")
+                        }
+        
+        except Exception as e:
+            print(f"Error calling patient creation API: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"There was a problem connecting to the patient creation service: {str(e)}"
+            }
+    
+    async def get_physician_id_by_name(self, physician_first_name, physician_last_name):
+        """
+        Make API call to get a physician by first name and last name
+        """
+        url = f"https://ep.soaper.ai/api/v1/agent/appointments/physicians"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    response_data = await response.json()
+                    for physician in response_data.get("items", []):
+                        if (physician.get("first_name") == physician_first_name and 
+                            physician.get("last_name") == physician_last_name):
+                            return {
+                                "status": "success",
+                                "physician_id": physician.get("id"),
+                                "physician_fname": physician.get("first_name"),
+                                "physician_lname": physician.get("last_name")
+                            }
+                    return {
+                        "status": "error",
+                        "message": "Physician not found"
+                    }
+
+        except Exception as e:
+            print(f"Error calling physician API: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"There was a problem connecting to the physician service: {str(e)}"
+            }
+        
+    async def get_doctor_time_slots(self, patient_id, doctor_id):
+        """
+        Make API call to get doctor's time slots for a given date
+        """
+        url = f"https://ep.soaper.ai/api/v1/agent/appointments/next-available"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=appointment_data, headers=headers) as response:
+                    response_data = await response.json()
+                    return {
+                        "status": "success",
+                        "message": "Doctor time slots retrieved successfully"
+                    }   
+        except Exception as e:
+            print(f"Error calling doctor time slots API: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"There was a problem connecting to the doctor time slots service: {str(e)}"
+            }
 
     async def book_appointment(self, appointment_data):
         """
