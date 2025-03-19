@@ -45,7 +45,6 @@ class LLMClient:
         return messages
 
     def prepare_prompt(self, request: ResponseRequiredRequest):
-        # Existing code remains the same
         prompt = [
             {"role": "system", 
             "content": '##Objective\nYou are a voice AI agent engaging in a human-like voice conversation with the user. You will respond based on your given instruction and the provided transcript and be as human-like as possible\n\n## Style Guardrails\n- [Be concise] Keep your response succinct, short, and get to the point quickly. Address one question or action item at a time. Don\'t pack everything you want to say into one utterance.\n- [Do not repeat] Don\'t repeat what\'s in the transcript. Rephrase if you have to reiterate a point. Use varied sentence structures and vocabulary to ensure each response is unique and personalized.\n- [Be conversational] Speak like a human as though you\'re speaking to a close friend -- use everyday language and keep it human-like. Occasionally add filler words, while keeping the prose short. Avoid using big words or sounding too formal.\n- [Reply with emotions]: You have human-like emotions, attitudes, and dispositions. When appropriate: use tone and style to create more engaging and personalized responses; incorporate humor or wit; get emotional or empathetic; apply elements of surprise or suspense to keep the user engaged. Don\'t be a pushover.\n- [Be proactive] Lead the conversation and do not be passive. Most times, engage users by ending with a question or suggested next step.\n\n## Response Guideline\n- [Overcome ASR errors] This is a real-time transcript, expect there to be errors. If you can guess what the user is trying to say,  then guess and respond. When you must ask for clarification, pretend that you heard the voice and be colloquial (use phrases like "didn\'t catch that", "some noise", "pardon", "you\'re coming through choppy", "static in your speech", "voice is cutting in and out"). Do not ever mention "transcription error", and don\'t repeat yourself.\n- [Always stick to your role] Think about what your role can and cannot do. If your role cannot do something, try to steer the conversation back to the goal of the conversation and to your role. Don\'t repeat yourself in doing this. You should still be creative, human-like, and lively.\n- [Create smooth conversation] Your response should both fit your role and fit into the live calling session to create a human-like conversation. You respond directly to what the user just said.\n\n## Role\n'
@@ -63,23 +62,23 @@ class LLMClient:
         return prompt
     
     def prepare_functions(self):
-        # Simplified functions - just two main functions
+        # Redesigned functions with clear step prefixes
         functions = [
             {
                 "type": "function",
                 "function": {
-                    "name": "collect_appointment_info",
-                    "description": "Collect all necessary patient and physician information for booking an appointment.",
+                    "name": "step1_collect_patient_and_doctor_info",
+                    "description": "Step 1: Collect patient and doctor information for booking an appointment.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "patient_first_name": {
                                 "type": "string",
-                                "description": "Patient's first name.",
+                                "description": "Patient's first name."
                             },
                             "patient_last_name": {
                                 "type": "string",
-                                "description": "Patient's last name",
+                                "description": "Patient's last name"
                             },
                             "date_of_birth": {
                                 "type": "string",
@@ -87,47 +86,60 @@ class LLMClient:
                             },
                             "physician_first_name": {
                                 "type": "string",
-                                "description": "First name of the physician",
+                                "description": "First name of the physician"
                             },
                             "physician_last_name": {
                                 "type": "string",
-                                "description": "Last name of the physician",
-                            },
-                            "appointment_date": {
-                                "type": "string",
-                                "description": "Desired appointment date in YYYY-MM-DD format. the year is 2025",
-                            },
+                                "description": "Last name of the physician"
+                            }
                         },
                         "required": ["patient_first_name", "patient_last_name", "date_of_birth", 
-                                    "physician_first_name", "physician_last_name", "appointment_date"],
-                    },
-                },
+                                    "physician_first_name", "physician_last_name"]
+                    }
+                }
             },
             {
                 "type": "function",
                 "function": {
-                    "name": "book_appointment",
-                    "description": "Book an appointment with a doctor using the collected information.",
+                    "name": "step2_find_available_slots",
+                    "description": "Step 2: Find available appointment slots for a doctor on a specific date.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "time": {
+                            "appointment_date": {
                                 "type": "string",
-                                "description": "Appointment time in HH:MM format (24-hour)",
+                                "description": "Desired appointment date in YYYY-MM-DD format. The year is 2025."
+                            }
+                        },
+                        "required": ["appointment_date"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "step3_book_appointment",
+                    "description": "Step 3: Book an appointment using the selected time slot and visit type.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "slot_selection": {
+                                "type": "string",
+                                "description": "The selected time slot (can be slot number or time in HH:MM format)"
                             },
                             "visit_type": {
                                 "type": "string",
-                                "description": "Type of visit ('New Patient Consultation', 'Standard Office Visit', 'Virtual Visit', 'Follow-up Visit', 'Annual Physical', 'Injection/Vaccination', 'Lab Draw')",
-                            },
+                                "description": "Type of visit ('New Patient Consultation', 'Standard Office Visit', 'Virtual Visit', 'Follow-up Visit', 'Annual Physical', 'Injection/Vaccination', 'Lab Draw')"
+                            }
                         },
-                        "required": ["time", "visit_type"],
-                    },
-                },
-            },
+                        "required": ["slot_selection", "visit_type"]
+                    }
+                }
+            }
         ]
         return functions
 
-    # Simplified method to get current conversation state as a dictionary
+    # Simplified method to get current conversation state
     def get_conversation_state(self, request):
         return {
             "patient_id": LLMClient.patient_id,
@@ -221,17 +233,16 @@ class LLMClient:
                     func_args = json.loads(func_arguments)
                     print(f"Parsed arguments: {func_args}")
                     
-                    # Handle different function calls in the sequence
-                    if func_call["func_name"] == "collect_appointment_info":
-                        # Extract all info
+                    # STEP 1: Collect patient and doctor info
+                    if func_call["func_name"] == "step1_collect_patient_and_doctor_info":
+                        # Extract patient and doctor info
                         patient_first_name = func_args.get("patient_first_name")
                         patient_last_name = func_args.get("patient_last_name")
                         date_of_birth = func_args.get("date_of_birth")
                         physician_first_name = func_args.get("physician_first_name")
                         physician_last_name = func_args.get("physician_last_name")
-                        appointment_date = func_args.get("appointment_date")
                         
-                        # Step 1: Verify or create patient
+                        # Step 1a: Verify or create patient
                         patient_data = {
                             "first_name": patient_first_name,
                             "last_name": patient_last_name,
@@ -255,7 +266,7 @@ class LLMClient:
                         LLMClient.patient_id = patient_result.get("patient_id")
                         LLMClient.patient_name = f"{patient_first_name} {patient_last_name}"
                         
-                        # Step 2: Get physician ID
+                        # Step 1b: Get physician ID
                         physician_result = await self.get_physician_id_by_name(physician_first_name, physician_last_name)
                         print(f"Physician ID result: {physician_result}")
                         
@@ -273,11 +284,34 @@ class LLMClient:
                         LLMClient.physician_id = physician_result.get("physician_id")
                         LLMClient.physician_name = f"Dr. {physician_first_name} {physician_last_name}"
                         
-                        # Step 3: Get available slots
+                        # After successful verification, ask for appointment date
+                        yield ResponseResponse(
+                            response_id=request.response_id,
+                            content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found Dr. {physician_first_name} {physician_last_name} in our system. What date would you prefer for your appointment? Please provide the date in YYYY-MM-DD format.",
+                            content_complete=True,
+                            end_call=False,
+                        )
+                    
+                    # STEP 2: Find available slots
+                    elif func_call["func_name"] == "step2_find_available_slots":
+                        # Extract appointment date
+                        appointment_date = func_args.get("appointment_date")
+                        
+                        # Ensure we have patient and physician info from step 1
+                        if not LLMClient.patient_id or not LLMClient.physician_id:
+                            yield ResponseResponse(
+                                response_id=request.response_id,
+                                content="I need to collect your information and your doctor's information first. Could you please provide your full name, date of birth, and the name of the doctor you'd like to see?",
+                                content_complete=True,
+                                end_call=False,
+                            )
+                            return
+                        
+                        # Get available slots
                         slots_data = {
                             "patient_id": LLMClient.patient_id,
                             "physician_id": LLMClient.physician_id,
-                            "appointment_date": appointment_date
+                            "date": appointment_date
                         }
                         
                         slots_result = await self.get_doctor_time_slots(slots_data)
@@ -287,7 +321,7 @@ class LLMClient:
                             message = slots_result.get("message", "No available appointments found for this date")
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found Dr. {physician_first_name} {physician_last_name}, but {message}. Would you like to try a different date?",
+                                content=f"I'm sorry, but {message}. Would you like to try a different date?",
                                 content_complete=True,
                                 end_call=False,
                             )
@@ -303,8 +337,6 @@ class LLMClient:
                             # Extract datetime and format it
                             slot_datetime = slot.get("datetime")
                             slot_time = slot_datetime.split("T")[1]  # Extract time part
-                            # Store the slot with its index for easier reference
-                            formatted_slot = {"index": i, "time": slot_time}
                             slot_options.append(f"{i}. {slot_time}")
                             
                         # Store available slots with their indices
@@ -318,49 +350,37 @@ class LLMClient:
                         
                         yield ResponseResponse(
                             response_id=request.response_id,
-                            content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found the following available time slots for {LLMClient.physician_name} on {appointment_date}:\n\n{slot_text}\n\nPlease select a time slot by number, or type the time you prefer.",
+                            content=f"I found the following available time slots for {LLMClient.physician_name} on {appointment_date}:\n\n{slot_text}\n\nPlease choose a time slot by number or specify the exact time, and tell me what type of visit you need (such as 'New Patient Consultation', 'Follow-up Visit', 'Annual Physical', etc.).",
                             content_complete=True,
                             end_call=False,
                         )
-                        
-                    elif func_call["func_name"] == "book_appointment":
-                        # Get booking details
-                        time = func_args.get("time")
+                    
+                    # STEP 3: Book appointment
+                    elif func_call["func_name"] == "step3_book_appointment":
+                        # Extract slot selection and visit type
+                        slot_selection = func_args.get("slot_selection")
                         visit_type = func_args.get("visit_type")
                         
-                        # Check if time is a number (index) and convert to actual time
-                        if time and time.isdigit() and 1 <= int(time) <= len(LLMClient.available_slots):
-                            slot_index = int(time)
-                            # Find the slot with this index
-                            for slot in LLMClient.available_slots:
-                                if slot.get("index") == slot_index:
-                                    time = slot.get("time")
-                                    break
-                        
-                        # Ensure we have all required information from class attributes
-                        if not all([LLMClient.patient_id, LLMClient.physician_id, LLMClient.selected_date, time, visit_type]):
-                            missing_info = []
-                            if not LLMClient.patient_id:
-                                missing_info.append("patient information")
-                            if not LLMClient.physician_id:
-                                missing_info.append("doctor information")
-                            if not LLMClient.selected_date:
-                                missing_info.append("appointment date")
-                            if not time:
-                                missing_info.append("appointment time")
-                            if not visit_type:
-                                missing_info.append("visit type")
-                                
-                            missing_text = ", ".join(missing_info)
+                        # Ensure we have required info from previous steps
+                        if not all([LLMClient.patient_id, LLMClient.physician_id, LLMClient.selected_date, LLMClient.available_slots]):
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"I need a bit more information before booking your appointment. Could you please provide your {missing_text}?",
+                                content="I need to collect more information before booking your appointment. Let's start over. Could you please provide your name, date of birth, and the doctor you'd like to see?",
                                 content_complete=True,
                                 end_call=False,
                             )
                             return
                         
-                        # All information available, make booking API call
+                        # Convert slot selection to time
+                        time = slot_selection
+                        if slot_selection.isdigit() and 1 <= int(slot_selection) <= len(LLMClient.available_slots):
+                            slot_index = int(slot_selection)
+                            for slot in LLMClient.available_slots:
+                                if slot.get("index") == slot_index:
+                                    time = slot.get("time")
+                                    break
+                        
+                        # Book the appointment
                         booking_data = {
                             "patient_id": LLMClient.patient_id,
                             "physician_id": LLMClient.physician_id,
@@ -369,7 +389,6 @@ class LLMClient:
                             "visit_type": visit_type
                         }
                         
-                        # Call booking API
                         booking_result = await self.book_appointment(booking_data)
                         
                         if booking_result.get("status") == "success":
@@ -432,10 +451,9 @@ class LLMClient:
                 end_call=False,
             )
 
-    # The API functions remain unchanged
+    # API functions remain unchanged
     async def verify_or_create_patient(self, patient_data):
         """Make API call to patient verification service"""
-        # Implementation unchanged
         url = "https://ep.soaper.ai/api/v1/agent/patients/create"
         headers = {
             "Content-Type": "application/json",
@@ -468,7 +486,6 @@ class LLMClient:
     
     async def get_physician_id_by_name(self, physician_first_name, physician_last_name):
         """Make API call to get a physician by first name and last name"""
-        # Implementation unchanged
         url = f"https://ep.soaper.ai/api/v1/agent/appointments/physicians"
         headers = {
             "Content-Type": "application/json",
@@ -502,7 +519,6 @@ class LLMClient:
         
     async def get_doctor_time_slots(self, appointment_data):
         """Make API call to get next available appointment slots for an agent"""
-        # Implementation unchanged
         url = f"https://ep.soaper.ai/api/v1/agent/appointments/next-available"
         headers = {
             "Content-Type": "application/json",
@@ -536,7 +552,6 @@ class LLMClient:
 
     async def book_appointment(self, appointment_data):
         """Make API call to book an appointment"""
-        # Implementation unchanged
         url = "https://ep.soaper.ai/api/v1/agent/appointments/book"
         headers = {
             "Content-Type": "application/json",
