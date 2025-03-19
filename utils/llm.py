@@ -117,7 +117,7 @@ class LLMClient:
                             },
                             "visit_type": {
                                 "type": "string",
-                                "description": "Type of visit (e.g. 'new patient', 'follow-up', 'annual checkup')",
+                                "description": "Type of visit ('New Patient Consultation', 'Standard Office Visit', 'Virtual Visit', 'Follow-up Visit', 'Annual Physical', 'Injection/Vaccination', 'Lab Draw')",
                             },
                         },
                         "required": ["time", "visit_type"],
@@ -318,7 +318,7 @@ class LLMClient:
                         
                         yield ResponseResponse(
                             response_id=request.response_id,
-                            content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found the following available time slots for {LLMClient.physician_name} on {appointment_date}:\n\n{slot_text}\n\nPlease select a time slot by number, or type the time you prefer (in HH:MM format). Also, please specify the type of visit (e.g., 'new patient', 'follow-up', 'annual checkup').",
+                            content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found the following available time slots for {LLMClient.physician_name} on {appointment_date}:\n\n{slot_text}\n\nPlease select a time slot by number, or type the time you prefer.",
                             content_complete=True,
                             end_call=False,
                         )
