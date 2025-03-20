@@ -21,6 +21,7 @@ class LLMClient:
     physician_name = None
     selected_date = None
     available_slots = []
+    physician_matches = None
     
     def __init__(self):
         self.client = AsyncAzureOpenAI(
@@ -61,7 +62,8 @@ class LLMClient:
         
         return prompt
     
-    def prepare_functions(self):
+    async def prepare_functions(self):
+        get_all_physicians_result = await self.get_all_physicians()
         # Redesigned functions with clear step prefixes
         functions = [
             {
@@ -84,17 +86,29 @@ class LLMClient:
                                 "type": "string",
                                 "description": "Patient's date of birth in YYYY-MM-DD format"
                             },
-                            "physician_first_name": {
+                            "physician_name": {
                                 "type": "string",
-                                "description": "First name of the physician"
-                            },
-                            "physician_last_name": {
-                                "type": "string",
-                                "description": "Last name of the physician"
+                                "description": "Name of the physician (can be first name, last name, or full name)"
                             }
                         },
-                        "required": ["patient_first_name", "patient_last_name", "date_of_birth", 
-                                    "physician_first_name", "physician_last_name"]
+                        "required": ["patient_first_name", "patient_last_name", "date_of_birth", "physician_name"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "select_physician_from_matches",
+                    "description": "Select a physician from multiple matches based on user choice.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "selection": {
+                                "type": "string",
+                                "description": "The selection number or doctor name chosen by the user"
+                            }
+                        },
+                        "required": ["selection"]
                     }
                 }
             },
@@ -147,7 +161,8 @@ class LLMClient:
             "physician_id": LLMClient.physician_id,
             "physician_name": LLMClient.physician_name,
             "selected_date": LLMClient.selected_date,
-            "available_slots": LLMClient.available_slots
+            "available_slots": LLMClient.available_slots,
+            "physician_matches": LLMClient.physician_matches
         }
 
     # Simplified method to save conversation state
@@ -164,6 +179,8 @@ class LLMClient:
             LLMClient.selected_date = state["selected_date"]
         if "available_slots" in state:
             LLMClient.available_slots = state["available_slots"]
+        if "physician_matches" in state:
+            LLMClient.physician_matches = state["physician_matches"]
 
     # Simplified method to append to conversation
     def append_to_conversation(self, request, role, name, content):
@@ -179,11 +196,12 @@ class LLMClient:
         
         try:
             # Create the streaming request
+            functions = await self.prepare_functions()
             stream = await self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=prompt,
                 stream=True,
-                tools=self.prepare_functions(),
+                tools=functions,
                 tool_choice="auto",
             )
 
@@ -239,8 +257,7 @@ class LLMClient:
                         patient_first_name = func_args.get("patient_first_name")
                         patient_last_name = func_args.get("patient_last_name")
                         date_of_birth = func_args.get("date_of_birth")
-                        physician_first_name = func_args.get("physician_first_name")
-                        physician_last_name = func_args.get("physician_last_name")
+                        physician_name = func_args.get("physician_name")
                         
                         # Step 1a: Verify or create patient
                         patient_data = {
@@ -266,11 +283,40 @@ class LLMClient:
                         LLMClient.patient_id = patient_result.get("patient_id")
                         LLMClient.patient_name = f"{patient_first_name} {patient_last_name}"
                         
-                        # Step 1b: Get physician ID
-                        physician_result = await self.get_physician_id_by_name(physician_first_name, physician_last_name)
-                        print(f"Physician ID result: {physician_result}")
+                        # Step 1b: Get physician info with flexible name matching
+                        physician_result = await self.get_physician_by_name(physician_name)
+                        print(f"Physician lookup result: {physician_result}")
                         
-                        if physician_result.get("status") != "success":
+                        if physician_result.get("status") == "success":
+                            # Store physician info and continue
+                            LLMClient.physician_id = physician_result.get("physician_id")
+                            LLMClient.physician_name = f"Dr. {physician_result.get('physician_fname')} {physician_result.get('physician_lname')}"
+                            
+                            # After successful verification, ask for appointment date
+                            yield ResponseResponse(
+                                response_id=request.response_id,
+                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found {LLMClient.physician_name} in our system. What date would you like to schedule your appointment?",
+                                content_complete=True,
+                                end_call=False,
+                            )
+                        
+                        elif physician_result.get("status") == "disambiguation_required":
+                            # We need to clarify which doctor the patient wants
+                            matches = physician_result.get("matches", [])
+                            match_text = "\n".join([f"{m['index']}. {m['name']} - {m['specialty']}" for m in matches])
+                            
+                            # Create a new temporary state to store matches for the next interaction
+                            LLMClient.physician_matches = matches
+                            
+                            yield ResponseResponse(
+                                response_id=request.response_id,
+                                content=f"Thank you, {LLMClient.patient_name}. I found multiple doctors matching '{physician_name}'. Could you please specify which one you'd like to see?\n\n{match_text}",
+                                content_complete=True,
+                                end_call=False,
+                            )
+                        
+                        else:
+                            # Error finding the physician
                             error_message = physician_result.get("message", "I couldn't find that doctor in our system")
                             yield ResponseResponse(
                                 response_id=request.response_id,
@@ -278,19 +324,83 @@ class LLMClient:
                                 content_complete=True,
                                 end_call=False,
                             )
+                    
+                    # Handle physician selection from disambiguation
+                    elif func_call["func_name"] == "select_physician_from_matches":
+                        selection = func_args.get("selection")
+                        
+                        # Check if we have matches stored
+                        if not LLMClient.physician_matches:
+                            yield ResponseResponse(
+                                response_id=request.response_id,
+                                content="I'm sorry, but I don't have any doctor matches to select from. Let's start over. Could you provide your information and the doctor you'd like to see?",
+                                content_complete=True,
+                                end_call=False,
+                            )
                             return
                         
-                        # Store physician info
-                        LLMClient.physician_id = physician_result.get("physician_id")
-                        LLMClient.physician_name = f"Dr. {physician_first_name} {physician_last_name}"
+                        # Handle selection by number
+                        if selection.isdigit():
+                            index = int(selection)
+                            matched_doctor = None
+                            for doctor in LLMClient.physician_matches:
+                                if doctor["index"] == index:
+                                    matched_doctor = doctor
+                                    break
+                            
+                            if matched_doctor:
+                                # Store physician info
+                                LLMClient.physician_id = matched_doctor["id"]
+                                LLMClient.physician_name = matched_doctor["name"]
+                                
+                                # Clean up the matches
+                                LLMClient.physician_matches = None
+                                
+                                # Proceed to date selection
+                                yield ResponseResponse(
+                                    response_id=request.response_id,
+                                    content=f"Great! You've selected {LLMClient.physician_name}. What date would you like to schedule your appointment?",
+                                    content_complete=True,
+                                    end_call=False,
+                                )
+                            else:
+                                yield ResponseResponse(
+                                    response_id=request.response_id,
+                                    content=f"I'm sorry, but I couldn't find a doctor matching selection '{selection}'. Please choose one of the numbers from the list I provided.",
+                                    content_complete=True,
+                                    end_call=False,
+                                )
                         
-                        # After successful verification, ask for appointment date
-                        yield ResponseResponse(
-                            response_id=request.response_id,
-                            content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found Dr. {physician_first_name} {physician_last_name} in our system. What date would you prefer for your appointment? Please provide the date in YYYY-MM-DD format.",
-                            content_complete=True,
-                            end_call=False,
-                        )
+                        # Handle selection by name
+                        else:
+                            matched_doctor = None
+                            for doctor in LLMClient.physician_matches:
+                                if selection.lower() in doctor["name"].lower():
+                                    matched_doctor = doctor
+                                    break
+                            
+                            if matched_doctor:
+                                # Store physician info
+                                LLMClient.physician_id = matched_doctor["id"]
+                                LLMClient.physician_name = matched_doctor["name"]
+                                
+                                # Clean up the matches
+                                LLMClient.physician_matches = None
+                                
+                                # Proceed to date selection
+                                yield ResponseResponse(
+                                    response_id=request.response_id,
+                                    content=f"Great! You've selected {LLMClient.physician_name}. What date would you like to schedule your appointment?",
+                                    content_complete=True,
+                                    end_call=False,
+                                )
+                            else:
+                                yield ResponseResponse(
+                                    response_id=request.response_id,
+                                    content=f"I'm sorry, but I couldn't find a doctor matching '{selection}'. Please choose one of the doctors from the list I provided.",
+                                    content_complete=True,
+                                    end_call=False,
+                                )
                     
                     # STEP 2: Find available slots
                     elif func_call["func_name"] == "step2_find_available_slots":
@@ -336,12 +446,26 @@ class LLMClient:
                         for i, slot in enumerate(slots[:5], 1):  # Limit to first 5 slots
                             # Extract datetime and format it
                             slot_datetime = slot.get("datetime")
-                            slot_time = slot_datetime.split("T")[1]  # Extract time part
-                            slot_options.append(f"{i}. {slot_time}")
+                            slot_time = slot_datetime.split("T")[1][:5]  # Extract time part HH:MM
+                            
+                            # Convert to AM/PM format
+                            hour = int(slot_time.split(":")[0])
+                            minute = slot_time.split(":")[1]
+                            am_pm = "AM" if hour < 12 else "PM"
+                            display_hour = hour if hour <= 12 else hour - 12
+                            if display_hour == 0:
+                                display_hour = 12
+                            
+                            time_display = f"{display_hour}:{minute} {am_pm}"
+                            slot_options.append(f"{i}. {time_display}")
                             
                         # Store available slots with their indices
                         LLMClient.available_slots = [
-                            {"index": i, "time": slot.get("datetime").split("T")[1]} 
+                            {
+                                "index": i, 
+                                "time": slot.get("datetime").split("T")[1][:5],
+                                "datetime": slot.get("datetime")
+                            }
                             for i, slot in enumerate(slots[:5], 1)
                         ]
                         
@@ -350,7 +474,7 @@ class LLMClient:
                         
                         yield ResponseResponse(
                             response_id=request.response_id,
-                            content=f"I found the following available time slots for {LLMClient.physician_name} on {appointment_date}:\n\n{slot_text}\n\nPlease choose a time slot by number or specify the exact time, and tell me what type of visit you need (such as 'New Patient Consultation', 'Follow-up Visit', 'Annual Physical', etc.).",
+                            content=f"I found the following available time slots for {LLMClient.physician_name} on {appointment_date}:\n\n{slot_text}\n\nPlease choose a time slot by number or time, and tell me what type of visit you need (such as 'New Patient Consultation', 'Follow-up Visit', 'Annual Physical', etc.).",
                             content_complete=True,
                             end_call=False,
                         )
@@ -371,31 +495,64 @@ class LLMClient:
                             )
                             return
                         
-                        # Convert slot selection to time
-                        time = slot_selection
+                        # Convert slot selection to datetime
+                        selected_datetime = None
+                        
+                        # If user provided a slot number
                         if slot_selection.isdigit() and 1 <= int(slot_selection) <= len(LLMClient.available_slots):
                             slot_index = int(slot_selection)
                             for slot in LLMClient.available_slots:
                                 if slot.get("index") == slot_index:
-                                    time = slot.get("time")
+                                    selected_datetime = slot.get("datetime")
                                     break
+                        
+                        # If user provided a time (HH:MM)
+                        else:
+                            # Try to match with available times
+                            entered_time = slot_selection.strip()
+                            # Handle various time formats (10:30, 10:30am, 10:30 am, etc.)
+                            entered_time = ''.join(c for c in entered_time if c.isdigit() or c == ':').strip()
+                            
+                            for slot in LLMClient.available_slots:
+                                if entered_time in slot.get("time"):
+                                    selected_datetime = slot.get("datetime")
+                                    break
+                        
+                        if not selected_datetime:
+                            yield ResponseResponse(
+                                response_id=request.response_id,
+                                content=f"I'm sorry, but I couldn't find a time slot matching '{slot_selection}'. Please choose one of the time slots from the list I provided.",
+                                content_complete=True,
+                                end_call=False,
+                            )
+                            return
                         
                         # Book the appointment
                         booking_data = {
                             "patient_id": LLMClient.patient_id,
                             "physician_id": LLMClient.physician_id,
-                            "date": LLMClient.selected_date,
-                            "time": time,
+                            "datetime": selected_datetime,
                             "visit_type": visit_type
                         }
                         
                         booking_result = await self.book_appointment(booking_data)
                         
                         if booking_result.get("status") == "success":
+                            # Format the time for display
+                            time_part = selected_datetime.split("T")[1][:5]
+                            hour = int(time_part.split(":")[0])
+                            minute = time_part.split(":")[1]
+                            am_pm = "AM" if hour < 12 else "PM"
+                            display_hour = hour if hour <= 12 else hour - 12
+                            if display_hour == 0:
+                                display_hour = 12
+                            
+                            formatted_time = f"{display_hour}:{minute} {am_pm}"
+                            
                             # Booking successful
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Great news, {LLMClient.patient_name}! I've booked your {visit_type} appointment with {LLMClient.physician_name} on {LLMClient.selected_date} at {time}. Your confirmation number is {booking_result.get('appointment_id')}. Is there anything else I can help you with?",
+                                content=f"Great news, {LLMClient.patient_name}! I've booked your {visit_type} appointment with {LLMClient.physician_name} on {LLMClient.selected_date} at {formatted_time}. Your confirmation number is {booking_result.get('appointment_id')}. Is there anything else I can help you with?",
                                 content_complete=True,
                                 end_call=False,
                             )
@@ -451,41 +608,14 @@ class LLMClient:
                 end_call=False,
             )
 
-    # API functions remain unchanged
-    async def verify_or_create_patient(self, patient_data):
-        """Make API call to patient verification service"""
-        url = "https://ep.soaper.ai/api/v1/agent/patients/create"
-        headers = {
-            "Content-Type": "application/json",
-            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
-        }
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=patient_data, headers=headers) as response:
-                    response_data = await response.json()
-                    
-                    if response_data.get("success", False):
-                        return {
-                            "status": "success",
-                            "message": response_data.get("message"),
-                            "patient_id": response_data.get("patient", {}).get("id")
-                        }
-                    else:
-                        return {
-                            "status": "error",
-                            "message": response_data.get("message", "Error creating patient")
-                        }
+    async def get_physician_by_name(self, physician_name):
+        """
+        Make API call to get a physician by name, handling partial matches
+        and disambiguation when needed.
         
-        except Exception as e:
-            print(f"Error calling patient creation API: {str(e)}")
-            return {
-                "status": "error",
-                "message": f"There was a problem connecting to the patient creation service: {str(e)}"
-            }
-    
-    async def get_physician_id_by_name(self, physician_first_name, physician_last_name):
-        """Make API call to get a physician by first name and last name"""
+        physician_name can be first name, last name, or full name.
+        Returns the physician ID or prompts for disambiguation if needed.
+        """
         url = f"https://ep.soaper.ai/api/v1/agent/appointments/physicians"
         headers = {
             "Content-Type": "application/json",
@@ -496,91 +626,137 @@ class LLMClient:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
                     response_data = await response.json()
-                    for physician in response_data.get("items", []):
-                        if (physician.get("first_name") == physician_first_name and 
-                            physician.get("last_name") == physician_last_name):
+                    physicians = response_data.get("items", [])
+                    
+                    # No physicians found
+                    if not physicians:
+                        return {
+                            "status": "error",
+                            "message": "No physicians found in our system."
+                        }
+                    
+                    # Split the provided name to handle various input formats
+                    name_parts = physician_name.strip().split()
+                    
+                    # Handle cases where only one name part is provided (first or last)
+                    if len(name_parts) == 1:
+                        single_name = name_parts[0].lower()
+                        matches = []
+                        
+                        for physician in physicians:
+                            if (single_name in physician.get("first_name", "").lower() or 
+                                single_name in physician.get("last_name", "").lower()):
+                                matches.append(physician)
+                        
+                        # Only one match found
+                        if len(matches) == 1:
+                            physician = matches[0]
                             return {
                                 "status": "success",
                                 "physician_id": physician.get("id"),
                                 "physician_fname": physician.get("first_name"),
                                 "physician_lname": physician.get("last_name")
                             }
-                    return {
-                        "status": "error",
-                        "message": "Physician not found"
-                    }
-
+                        
+                        # Multiple matches, need disambiguation
+                        elif len(matches) > 1:
+                            match_descriptions = []
+                            for i, p in enumerate(matches[:5], 1):  # Limit to 5 matches
+                                specialty = p.get("specialty", "General Practitioner")
+                                match_descriptions.append({
+                                    "index": i,
+                                    "id": p.get("id"),
+                                    "name": f"Dr. {p.get('first_name')} {p.get('last_name')}",
+                                    "specialty": specialty
+                                })
+                            
+                            return {
+                                "status": "disambiguation_required",
+                                "message": f"We found multiple doctors matching '{physician_name}'.",
+                                "matches": match_descriptions
+                            }
+                        
+                        # No matches
+                        else:
+                            return {
+                                "status": "error",
+                                "message": f"No physicians found matching '{physician_name}'."
+                            }
+                    
+                    # Full name provided (first and last or more)
+                    else:
+                        # Try exact match first with first and last name
+                        first_name = name_parts[0]
+                        last_name = name_parts[-1]
+                        
+                        for physician in physicians:
+                            if (physician.get("first_name", "").lower() == first_name.lower() and 
+                                physician.get("last_name", "").lower() == last_name.lower()):
+                                return {
+                                    "status": "success",
+                                    "physician_id": physician.get("id"),
+                                    "physician_fname": physician.get("first_name"),
+                                    "physician_lname": physician.get("last_name")
+                                }
+                        
+                        # Try partial match on first and last name
+                        matches = []
+                        for physician in physicians:
+                            if (first_name.lower() in physician.get("first_name", "").lower() and 
+                                last_name.lower() in physician.get("last_name", "").lower()):
+                                matches.append(physician)
+                        
+                        if len(matches) == 1:
+                            physician = matches[0]
+                            return {
+                                "status": "success",
+                                "physician_id": physician.get("id"),
+                                "physician_fname": physician.get("first_name"),
+                                "physician_lname": physician.get("last_name")
+                            }
+                        
+                        # Try matching just the last name if that fails
+                        if not matches:
+                            for physician in physicians:
+                                if last_name.lower() in physician.get("last_name", "").lower():
+                                    matches.append(physician)
+                        
+                        # Handle multiple matches or no matches
+                        if len(matches) > 1:
+                            match_descriptions = []
+                            for i, p in enumerate(matches[:5], 1):
+                                specialty = p.get("specialty", "General Practitioner")
+                                match_descriptions.append({
+                                    "index": i,
+                                    "id": p.get("id"),
+                                    "name": f"Dr. {p.get('first_name')} {p.get('last_name')}",
+                                    "specialty": specialty
+                                })
+                            
+                            return {
+                                "status": "disambiguation_required",
+                                "message": f"We found multiple doctors matching '{physician_name}'.",
+                                "matches": match_descriptions
+                            }
+                        
+                        elif len(matches) == 1:
+                            physician = matches[0]
+                            return {
+                                "status": "success",
+                                "physician_id": physician.get("id"),
+                                "physician_fname": physician.get("first_name"),
+                                "physician_lname": physician.get("last_name")
+                            }
+                        
+                        else:
+                            return {
+                                "status": "error",
+                                "message": f"No physicians found matching '{physician_name}'."
+                            }
         except Exception as e:
-            print(f"Error calling physician API: {str(e)}")
+            print(f"Error in get_physician_by_name: {str(e)}")
             return {
                 "status": "error",
                 "message": f"There was a problem connecting to the physician service: {str(e)}"
             }
         
-    async def get_doctor_time_slots(self, appointment_data):
-        """Make API call to get next available appointment slots for an agent"""
-        url = f"https://ep.soaper.ai/api/v1/agent/appointments/next-available"
-        headers = {
-            "Content-Type": "application/json",
-            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
-        }
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=appointment_data, headers=headers) as response:
-                    response_data = await response.json()
-                    if response_data.get("success", False):
-                        return {
-                            "success": True,
-                            "slots": response_data.get("slots", []),
-                            "message": response_data.get("message", "Doctor time slots retrieved successfully")
-                        }
-                    else:
-                        return {
-                            "success": False,
-                            "slots": [],
-                            "message": response_data.get("message", "No available appointments found")
-                        }
-                    
-        except Exception as e:
-            print(f"Error calling next available slots API: {str(e)}")
-            return {
-                "success": False,
-                "slots": [],
-                "message": f"There was a problem connecting to the next available slots service: {str(e)}"
-            }
-
-    async def book_appointment(self, appointment_data):
-        """Make API call to book an appointment"""
-        url = "https://ep.soaper.ai/api/v1/agent/appointments/book"
-        headers = {
-            "Content-Type": "application/json",
-            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
-        }
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=appointment_data, headers=headers) as response:
-                    response_data = await response.json()
-                    
-                    if response_data.get("success", False):
-                        return {
-                            "status": "success",
-                            "message": response_data.get("message"),
-                            "appointment_id": response_data.get("appointment", {}).get("id")
-                        }
-                    else:
-                        error_code = response_data.get("error_code", "UNKNOWN_ERROR")
-                        return {
-                            "status": "error",
-                            "error_code": error_code,
-                            "message": response_data.get("message", "Error booking appointment")
-                        }
-        
-        except Exception as e:
-            print(f"Error calling booking API: {str(e)}")
-            return {
-                "status": "error",
-                "error_code": "API_ERROR",
-                "message": f"There was a problem connecting to the booking service: {str(e)}"
-            }
