@@ -63,8 +63,6 @@ class LLMClient:
         return prompt
     
     async def prepare_functions(self):
-        get_all_physicians_result = await self.get_all_physicians()
-        # Redesigned functions with clear step prefixes
         functions = [
             {
                 "type": "function",
@@ -88,7 +86,7 @@ class LLMClient:
                             },
                             "physician_name": {
                                 "type": "string",
-                                "description": "Name of the physician (can be first name, last name, or full name)"
+                                "description": "Name of the physician (can be first name, last name, or full name). Remove Dr. or doctor or anything else from the name if it is present."
                             }
                         },
                         "required": ["patient_first_name", "patient_last_name", "date_of_birth", "physician_name"]
@@ -186,6 +184,295 @@ class LLMClient:
     def append_to_conversation(self, request, role, name, content):
         # Just log for now, since we're not tracking conversation history
         print(f"[{role}] {name}: {content}")
+
+    # API methods
+    async def verify_or_create_patient(self, patient_data):
+        """Make API call to patient verification service"""
+        url = "https://ep.soaper.ai/api/v1/agent/patients/create"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=patient_data, headers=headers) as response:
+                    response_data = await response.json()
+                    
+                    if response_data.get("success", False):
+                        return {
+                            "status": "success",
+                            "message": response_data.get("message"),
+                            "patient_id": response_data.get("patient", {}).get("id")
+                        }
+                    else:
+                        return {
+                            "status": "error",
+                            "message": response_data.get("message", "Error creating patient")
+                        }
+        
+        except Exception as e:
+            print(f"Error calling patient creation API: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"There was a problem connecting to the patient creation service: {str(e)}"
+            }
+    
+    async def get_physician_by_name(self, physician_name):
+        """
+        Make API call to get a physician by name, handling partial matches
+        and disambiguation when needed.
+        
+        physician_name can be first name, last name, or full name.
+        Returns the physician ID or prompts for disambiguation if needed.
+        """
+        url = f"https://ep.soaper.ai/api/v1/agent/appointments/physicians"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    response_data = await response.json()
+                    physicians = response_data.get("items", [])
+                    
+                    # No physicians found
+                    if not physicians:
+                        return {
+                            "status": "error",
+                            "message": "No physicians found in our system."
+                        }
+                    
+                    # Split the provided name to handle various input formats
+                    name_parts = physician_name.strip().split()
+                    
+                    # Handle cases where only one name part is provided (first or last)
+                    if len(name_parts) == 1:
+                        single_name = name_parts[0].lower()
+                        matches = []
+                        
+                        for physician in physicians:
+                            if (single_name in physician.get("first_name", "").lower() or 
+                                single_name in physician.get("last_name", "").lower()):
+                                matches.append(physician)
+                        
+                        # Only one match found
+                        if len(matches) == 1:
+                            physician = matches[0]
+                            return {
+                                "status": "success",
+                                "physician_id": physician.get("id"),
+                                "physician_fname": physician.get("first_name"),
+                                "physician_lname": physician.get("last_name")
+                            }
+                        
+                        # Multiple matches, need disambiguation
+                        elif len(matches) > 1:
+                            match_descriptions = []
+                            for i, p in enumerate(matches[:5], 1):  # Limit to 5 matches
+                                specialty = p.get("specialty", "General Practitioner")
+                                match_descriptions.append({
+                                    "index": i,
+                                    "id": p.get("id"),
+                                    "name": f"Dr. {p.get('first_name')} {p.get('last_name')}",
+                                    "specialty": specialty
+                                })
+                            
+                            return {
+                                "status": "disambiguation_required",
+                                "message": f"We found multiple doctors matching '{physician_name}'.",
+                                "matches": match_descriptions
+                            }
+                        
+                        # No matches
+                        else:
+                            return {
+                                "status": "error",
+                                "message": f"No physicians found matching '{physician_name}'."
+                            }
+                    
+                    # Full name provided (first and last or more)
+                    else:
+                        # Try exact match first with first and last name
+                        first_name = name_parts[0]
+                        last_name = name_parts[-1]
+                        
+                        for physician in physicians:
+                            if (physician.get("first_name", "").lower() == first_name.lower() and 
+                                physician.get("last_name", "").lower() == last_name.lower()):
+                                return {
+                                    "status": "success",
+                                    "physician_id": physician.get("id"),
+                                    "physician_fname": physician.get("first_name"),
+                                    "physician_lname": physician.get("last_name")
+                                }
+                        
+                        # Try partial match on first and last name
+                        matches = []
+                        for physician in physicians:
+                            if (first_name.lower() in physician.get("first_name", "").lower() and 
+                                last_name.lower() in physician.get("last_name", "").lower()):
+                                matches.append(physician)
+                        
+                        if len(matches) == 1:
+                            physician = matches[0]
+                            return {
+                                "status": "success",
+                                "physician_id": physician.get("id"),
+                                "physician_fname": physician.get("first_name"),
+                                "physician_lname": physician.get("last_name")
+                            }
+                        
+                        # Try matching just the last name if that fails
+                        if not matches:
+                            for physician in physicians:
+                                if last_name.lower() in physician.get("last_name", "").lower():
+                                    matches.append(physician)
+                        
+                        # Handle multiple matches or no matches
+                        if len(matches) > 1:
+                            match_descriptions = []
+                            for i, p in enumerate(matches[:5], 1):
+                                specialty = p.get("specialty", "General Practitioner")
+                                match_descriptions.append({
+                                    "index": i,
+                                    "id": p.get("id"),
+                                    "name": f"Dr. {p.get('first_name')} {p.get('last_name')}",
+                                    "specialty": specialty
+                                })
+                            
+                            return {
+                                "status": "disambiguation_required",
+                                "message": f"We found multiple doctors matching '{physician_name}'.",
+                                "matches": match_descriptions
+                            }
+                        
+                        elif len(matches) == 1:
+                            physician = matches[0]
+                            return {
+                                "status": "success",
+                                "physician_id": physician.get("id"),
+                                "physician_fname": physician.get("first_name"),
+                                "physician_lname": physician.get("last_name")
+                            }
+                        
+                        else:
+                            return {
+                                "status": "error",
+                                "message": f"No physicians found matching '{physician_name}'."
+                            }
+
+        except Exception as e:
+            print(f"Error calling physician API: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"There was a problem connecting to the physician service: {str(e)}"
+            }
+    
+    async def get_physician_id_by_name(self, physician_first_name, physician_last_name):
+        """Make API call to get a physician by first name and last name"""
+        url = f"https://ep.soaper.ai/api/v1/agent/appointments/physicians"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    response_data = await response.json()
+                    for physician in response_data.get("items", []):
+                        if (physician.get("first_name") == physician_first_name and 
+                            physician.get("last_name") == physician_last_name):
+                            return {
+                                "status": "success",
+                                "physician_id": physician.get("id"),
+                                "physician_fname": physician.get("first_name"),
+                                "physician_lname": physician.get("last_name")
+                            }
+                    return {
+                        "status": "error",
+                        "message": "Physician not found"
+                    }
+
+        except Exception as e:
+            print(f"Error calling physician API: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"There was a problem connecting to the physician service: {str(e)}"
+            }
+        
+    async def get_doctor_time_slots(self, appointment_data):
+        """Make API call to get next available appointment slots for an agent"""
+        url = f"https://ep.soaper.ai/api/v1/agent/appointments/next-available"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=appointment_data, headers=headers) as response:
+                    response_data = await response.json()
+                    if response_data.get("success", False):
+                        return {
+                            "success": True,
+                            "slots": response_data.get("slots", []),
+                            "message": response_data.get("message", "Doctor time slots retrieved successfully")
+                        }
+                    else:
+                        return {
+                            "success": False,
+                            "slots": [],
+                            "message": response_data.get("message", "No available appointments found")
+                        }
+                    
+        except Exception as e:
+            print(f"Error calling next available slots API: {str(e)}")
+            return {
+                "success": False,
+                "slots": [],
+                "message": f"There was a problem connecting to the next available slots service: {str(e)}"
+            }
+
+    async def book_appointment(self, appointment_data):
+        """Make API call to book an appointment"""
+        url = "https://ep.soaper.ai/api/v1/agent/appointments/schedule"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=appointment_data, headers=headers) as response:
+                    print(f"Booking data: {appointment_data}")
+                    response_data = await response.json()
+                    print(f"Booking response: {response_data}")
+                    
+                    if response_data.get("success", False):
+                        return {
+                            "status": "success",
+                            "message": response_data.get("message"),
+                            "appointment_id": response_data.get("appointment", {}).get("id")
+                        }
+                    else:
+                        error_code = response_data.get("error_code", "UNKNOWN_ERROR")
+                        return {
+                            "status": "error",
+                            "error_code": error_code,
+                            "message": response_data.get("message", "Error booking appointment")
+                        }
+        
+        except Exception as e:
+            print(f"Error calling booking API: {str(e)}")
+            return {
+                "status": "error",
+                "error_code": "API_ERROR",
+                "message": f"There was a problem connecting to the booking service: {str(e)}"
+            }
 
     async def draft_response(self, request: ResponseRequiredRequest):
         prompt = self.prepare_prompt(request)
@@ -345,37 +632,6 @@ class LLMClient:
                             matched_doctor = None
                             for doctor in LLMClient.physician_matches:
                                 if doctor["index"] == index:
-                                    matched_doctor = doctor
-                                    break
-                            
-                            if matched_doctor:
-                                # Store physician info
-                                LLMClient.physician_id = matched_doctor["id"]
-                                LLMClient.physician_name = matched_doctor["name"]
-                                
-                                # Clean up the matches
-                                LLMClient.physician_matches = None
-                                
-                                # Proceed to date selection
-                                yield ResponseResponse(
-                                    response_id=request.response_id,
-                                    content=f"Great! You've selected {LLMClient.physician_name}. What date would you like to schedule your appointment?",
-                                    content_complete=True,
-                                    end_call=False,
-                                )
-                            else:
-                                yield ResponseResponse(
-                                    response_id=request.response_id,
-                                    content=f"I'm sorry, but I couldn't find a doctor matching selection '{selection}'. Please choose one of the numbers from the list I provided.",
-                                    content_complete=True,
-                                    end_call=False,
-                                )
-                        
-                        # Handle selection by name
-                        else:
-                            matched_doctor = None
-                            for doctor in LLMClient.physician_matches:
-                                if selection.lower() in doctor["name"].lower():
                                     matched_doctor = doctor
                                     break
                             
@@ -607,156 +863,3 @@ class LLMClient:
                 content_complete=True,
                 end_call=False,
             )
-
-    async def get_physician_by_name(self, physician_name):
-        """
-        Make API call to get a physician by name, handling partial matches
-        and disambiguation when needed.
-        
-        physician_name can be first name, last name, or full name.
-        Returns the physician ID or prompts for disambiguation if needed.
-        """
-        url = f"https://ep.soaper.ai/api/v1/agent/appointments/physicians"
-        headers = {
-            "Content-Type": "application/json",
-            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
-        }
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as response:
-                    response_data = await response.json()
-                    physicians = response_data.get("items", [])
-                    
-                    # No physicians found
-                    if not physicians:
-                        return {
-                            "status": "error",
-                            "message": "No physicians found in our system."
-                        }
-                    
-                    # Split the provided name to handle various input formats
-                    name_parts = physician_name.strip().split()
-                    
-                    # Handle cases where only one name part is provided (first or last)
-                    if len(name_parts) == 1:
-                        single_name = name_parts[0].lower()
-                        matches = []
-                        
-                        for physician in physicians:
-                            if (single_name in physician.get("first_name", "").lower() or 
-                                single_name in physician.get("last_name", "").lower()):
-                                matches.append(physician)
-                        
-                        # Only one match found
-                        if len(matches) == 1:
-                            physician = matches[0]
-                            return {
-                                "status": "success",
-                                "physician_id": physician.get("id"),
-                                "physician_fname": physician.get("first_name"),
-                                "physician_lname": physician.get("last_name")
-                            }
-                        
-                        # Multiple matches, need disambiguation
-                        elif len(matches) > 1:
-                            match_descriptions = []
-                            for i, p in enumerate(matches[:5], 1):  # Limit to 5 matches
-                                specialty = p.get("specialty", "General Practitioner")
-                                match_descriptions.append({
-                                    "index": i,
-                                    "id": p.get("id"),
-                                    "name": f"Dr. {p.get('first_name')} {p.get('last_name')}",
-                                    "specialty": specialty
-                                })
-                            
-                            return {
-                                "status": "disambiguation_required",
-                                "message": f"We found multiple doctors matching '{physician_name}'.",
-                                "matches": match_descriptions
-                            }
-                        
-                        # No matches
-                        else:
-                            return {
-                                "status": "error",
-                                "message": f"No physicians found matching '{physician_name}'."
-                            }
-                    
-                    # Full name provided (first and last or more)
-                    else:
-                        # Try exact match first with first and last name
-                        first_name = name_parts[0]
-                        last_name = name_parts[-1]
-                        
-                        for physician in physicians:
-                            if (physician.get("first_name", "").lower() == first_name.lower() and 
-                                physician.get("last_name", "").lower() == last_name.lower()):
-                                return {
-                                    "status": "success",
-                                    "physician_id": physician.get("id"),
-                                    "physician_fname": physician.get("first_name"),
-                                    "physician_lname": physician.get("last_name")
-                                }
-                        
-                        # Try partial match on first and last name
-                        matches = []
-                        for physician in physicians:
-                            if (first_name.lower() in physician.get("first_name", "").lower() and 
-                                last_name.lower() in physician.get("last_name", "").lower()):
-                                matches.append(physician)
-                        
-                        if len(matches) == 1:
-                            physician = matches[0]
-                            return {
-                                "status": "success",
-                                "physician_id": physician.get("id"),
-                                "physician_fname": physician.get("first_name"),
-                                "physician_lname": physician.get("last_name")
-                            }
-                        
-                        # Try matching just the last name if that fails
-                        if not matches:
-                            for physician in physicians:
-                                if last_name.lower() in physician.get("last_name", "").lower():
-                                    matches.append(physician)
-                        
-                        # Handle multiple matches or no matches
-                        if len(matches) > 1:
-                            match_descriptions = []
-                            for i, p in enumerate(matches[:5], 1):
-                                specialty = p.get("specialty", "General Practitioner")
-                                match_descriptions.append({
-                                    "index": i,
-                                    "id": p.get("id"),
-                                    "name": f"Dr. {p.get('first_name')} {p.get('last_name')}",
-                                    "specialty": specialty
-                                })
-                            
-                            return {
-                                "status": "disambiguation_required",
-                                "message": f"We found multiple doctors matching '{physician_name}'.",
-                                "matches": match_descriptions
-                            }
-                        
-                        elif len(matches) == 1:
-                            physician = matches[0]
-                            return {
-                                "status": "success",
-                                "physician_id": physician.get("id"),
-                                "physician_fname": physician.get("first_name"),
-                                "physician_lname": physician.get("last_name")
-                            }
-                        
-                        else:
-                            return {
-                                "status": "error",
-                                "message": f"No physicians found matching '{physician_name}'."
-                            }
-        except Exception as e:
-            print(f"Error in get_physician_by_name: {str(e)}")
-            return {
-                "status": "error",
-                "message": f"There was a problem connecting to the physician service: {str(e)}"
-            }
-        
