@@ -100,7 +100,8 @@ async def websocket_handler(websocket: WebSocket, call_id: str):
                 print(f"Handling interaction type: {interaction_type}")
                 
                 if interaction_type == "call_details":
-                    await websocket.send_json(llm_client.draft_begin_message().__dict__)
+                    response = await llm_client.draft_begin_message()
+                    await websocket.send_json(response.__dict__)
                 elif interaction_type == "ping_pong":
                     await websocket.send_json({"response_type": "ping_pong", "timestamp": request_json.get("timestamp")})
                 elif interaction_type in ("response_required", "reminder_required"):
@@ -117,7 +118,7 @@ async def websocket_handler(websocket: WebSocket, call_id: str):
                 print(f"Error handling message: {e}")
             finally:
                 heartbeat_task.cancel()
-                
+
         async def send_heartbeats(websocket: WebSocket):
             """Send periodic pings to keep the connection alive."""
             try:
