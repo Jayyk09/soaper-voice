@@ -1,4 +1,4 @@
-from utils.config import begin_sentence, agent_prompt
+from utils.config import agent_prompt
 import os
 from openai import AsyncAzureOpenAI
 from utils.custom_types import (
@@ -6,6 +6,7 @@ from utils.custom_types import (
     ResponseResponse,
     Utterance,
 )
+
 from typing import List
 from dotenv import load_dotenv
 import asyncio
@@ -30,7 +31,24 @@ class LLMClient:
             api_version=os.getenv("AZURE_API_VERSION"),
         )
 
-    def draft_begin_message(self):
+    async def draft_begin_message(self):
+        url = "https://ep.soaper.ai/api/v1/agent/appointments/physicians"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                physicians = [physician['last_name'] for physician in (await response.json())['items']]
+
+        physicians = ['Doctor ' + physician for physician in physicians]
+        if len(physicians) > 2:
+            begin_sentence = ', '.join(physicians[:-1]) + ', and ' + physicians[-1]
+        else:
+            begin_sentence = ' and '.join(physicians)
+
+        begin_sentence = f"Hello, thank you for calling, you have reached the office of {begin_sentence}. I can help you schedule an appointment with them. If you're an existing patient, please use our mobile app for additional assistance."
+
         return ResponseResponse(
             response_id=0,
             content=begin_sentence,
@@ -86,7 +104,7 @@ class LLMClient:
                             },
                             "physician_name": {
                                 "type": "string",
-                                "description": "Name of the physician (can be first name, last name, or full name). Remove Dr. or doctor or anything else from the name if it is present."
+                                "description": "Name of the physician (can be first name, last name, or full name). Remove Dr. or doctor or anything else from the name if it is present. Ask the user for the name if they don't provide it."
                             }
                         },
                         "required": ["patient_first_name", "patient_last_name", "date_of_birth", "physician_name"]
@@ -120,7 +138,7 @@ class LLMClient:
                         "properties": {
                             "appointment_date": {
                                 "type": "string",
-                                "description": "Desired appointment date in YYYY-MM-DD format. The year is 2025."
+                                "description": "Desired appointment date in YYYY-MM-DD format. The year is 2025. Ask the user for the date if they don't provide it."
                             }
                         },
                         "required": ["appointment_date"]
@@ -582,7 +600,7 @@ class LLMClient:
                             # After successful verification, ask for appointment date
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found {LLMClient.physician_name} in our system. What date would you like to schedule your appointment?",
+                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found {LLMClient.physician_name} in our system. Let's proceed now to find a date for your appointment.",
                                 content_complete=True,
                                 end_call=False,
                             )
@@ -646,7 +664,7 @@ class LLMClient:
                                 # Proceed to date selection
                                 yield ResponseResponse(
                                     response_id=request.response_id,
-                                    content=f"Great! You've selected {LLMClient.physician_name}. What date would you like to schedule your appointment?",
+                                    content=f"Great! You've selected {LLMClient.physician_name}. Let's proceed now to find a date for your appointment.",
                                     content_complete=True,
                                     end_call=False,
                                 )
