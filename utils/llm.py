@@ -86,7 +86,7 @@ class LLMClient:
                 "type": "function",
                 "function": {
                     "name": "step1_collect_patient_and_doctor_info",
-                    "description": "Step 1: Collect patient and doctor information for booking an appointment.",
+                    "description": "Step 1: Collect patient and doctor information for booking an appointment. Tell the user that they will need to wait a moment while I verify their information.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -132,7 +132,7 @@ class LLMClient:
                 "type": "function",
                 "function": {
                     "name": "step2_find_available_slots",
-                    "description": "Step 2: Find available appointment slots for a doctor on a specific date.",
+                    "description": "Step 2: Find available appointment slots for a doctor on a specific date. Tell the user that you will need to wait a moment while I check for available appointments.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -430,8 +430,7 @@ class LLMClient:
             "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
         }
 
-        # Create a task for the API call
-        async def fetch_slots():
+        try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=appointment_data, headers=headers) as response:
                     response_data = await response.json()
@@ -448,25 +447,6 @@ class LLMClient:
                             "message": response_data.get("message", "No available appointments found")
                         }
 
-        try:
-            # Set a timeout for the API call
-            fetch_task = asyncio.create_task(fetch_slots())
-            
-            # Wait for 1 seconds, if it takes longer, we'll send a waiting message
-            done, pending = await asyncio.wait([fetch_task], timeout=1.0)
-            
-            if fetch_task in pending:
-                # API call is still running, return a temporary message
-                print("Slots API call taking longer than expected, returning waiting message")
-                return {
-                    "success": "waiting",
-                    "slots": [],
-                    "message": "I'm checking our system for available appointments. This might take a moment, please wait..."
-                }
-            
-            # API call completed within timeout
-            return await fetch_task
-                
         except Exception as e:
             print(f"Error calling next available slots API: {str(e)}")
             return {
@@ -710,7 +690,7 @@ class LLMClient:
                                 end_call=False,
                             )
                             return
-                        
+                                                
                         # Get available slots
                         slots_data = {
                             "patient_id": LLMClient.patient_id,
@@ -720,19 +700,6 @@ class LLMClient:
                         
                         slots_result = await self.get_doctor_time_slots(slots_data)
                         print(f"Time slots result: {slots_result}")
-                        
-                        if slots_result.get("success") == "waiting":
-                            # Send a waiting message to the user
-                            yield ResponseResponse(
-                                response_id=request.response_id,
-                                content=slots_result.get("message", "Please wait while I check for available appointments..."),
-                                content_complete=True,
-                                end_call=False,
-                            )
-                            
-                            # Now actually wait for the complete result
-                            slots_result = await self.get_doctor_time_slots(slots_data)
-                            print(f"Time slots result after waiting: {slots_result}")
                         
                         if not slots_result.get("success") or not slots_result.get("slots"):
                             message = slots_result.get("message", "No available appointments found for this date")
