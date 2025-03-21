@@ -47,7 +47,7 @@ class LLMClient:
         else:
             begin_sentence = ' and '.join(physicians)
 
-        begin_sentence = f"Hello, thank you for calling, you have reached the office of {begin_sentence}. I can help you schedule an appointment with them. If you're an existing patient, please use our mobile app for additional assistance."
+        begin_sentence = f"Hello, thank you for calling, you have reached the office of {begin_sentence}. If you're an existing patient, please use our mobile app for additional assistance. Would you like to schedule an appointment?"
 
         return ResponseResponse(
             response_id=0,
@@ -138,7 +138,7 @@ class LLMClient:
                         "properties": {
                             "appointment_date": {
                                 "type": "string",
-                                "description": "Desired appointment date in YYYY-MM-DD format. The year is 2025. Ask the user for the date if they don't provide it."
+                                "description": "Desired appointment date in YYYY-MM-DD format. The year is 2025. Ask the user for the date if they dont provide it. Ask when would they like to schedule the appointment."
                             }
                         },
                         "required": ["appointment_date"]
@@ -430,7 +430,8 @@ class LLMClient:
             "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
         }
 
-        try:
+        # Create a task for the API call
+        async def fetch_slots():
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=appointment_data, headers=headers) as response:
                     response_data = await response.json()
@@ -446,7 +447,26 @@ class LLMClient:
                             "slots": [],
                             "message": response_data.get("message", "No available appointments found")
                         }
-                    
+
+        try:
+            # Set a timeout for the API call
+            fetch_task = asyncio.create_task(fetch_slots())
+            
+            # Wait for 1 seconds, if it takes longer, we'll send a waiting message
+            done, pending = await asyncio.wait([fetch_task], timeout=1.0)
+            
+            if fetch_task in pending:
+                # API call is still running, return a temporary message
+                print("Slots API call taking longer than expected, returning waiting message")
+                return {
+                    "success": "waiting",
+                    "slots": [],
+                    "message": "I'm checking our system for available appointments. This might take a moment, please wait..."
+                }
+            
+            # API call completed within timeout
+            return await fetch_task
+                
         except Exception as e:
             print(f"Error calling next available slots API: {str(e)}")
             return {
@@ -701,6 +721,19 @@ class LLMClient:
                         slots_result = await self.get_doctor_time_slots(slots_data)
                         print(f"Time slots result: {slots_result}")
                         
+                        if slots_result.get("success") == "waiting":
+                            # Send a waiting message to the user
+                            yield ResponseResponse(
+                                response_id=request.response_id,
+                                content=slots_result.get("message", "Please wait while I check for available appointments..."),
+                                content_complete=True,
+                                end_call=False,
+                            )
+                            
+                            # Now actually wait for the complete result
+                            slots_result = await self.get_doctor_time_slots(slots_data)
+                            print(f"Time slots result after waiting: {slots_result}")
+                        
                         if not slots_result.get("success") or not slots_result.get("slots"):
                             message = slots_result.get("message", "No available appointments found for this date")
                             yield ResponseResponse(
@@ -806,7 +839,8 @@ class LLMClient:
                             "patient_id": LLMClient.patient_id,
                             "physician_id": LLMClient.physician_id,
                             "datetime": selected_datetime,
-                            "visit_type": visit_type
+                            "visit_type": visit_type,
+                            "created_by": "00000000-0000-0000-0000-000000000002"
                         }
                         
                         booking_result = await self.book_appointment(booking_data)
