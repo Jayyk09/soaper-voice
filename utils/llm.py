@@ -6,6 +6,7 @@ from utils.custom_types import (
     ResponseResponse,
     Utterance,
 )
+import datetime
 
 from typing import List
 from dotenv import load_dotenv
@@ -23,6 +24,7 @@ class LLMClient:
     selected_date = None
     available_slots = []
     physician_matches = None
+    visit_type = None
     
     def __init__(self):
         self.client = AsyncAzureOpenAI(
@@ -86,7 +88,7 @@ class LLMClient:
                 "type": "function",
                 "function": {
                     "name": "step1_collect_patient_and_doctor_info",
-                    "description": "Step 1: Collect patient and doctor information for booking an appointment. Tell the user that they will need to wait a moment while I verify their information.",
+                    "description": "Step 1: Collect patient and doctor information for booking an appointment. First ask for the patient's first and last name, after getting that, ask for the date of birth, and finally the physician's name. MAKE SURE to tell the user TO wait a moment verifying their information before calling the function.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -132,13 +134,15 @@ class LLMClient:
                 "type": "function",
                 "function": {
                     "name": "step2_find_available_slots",
-                    "description": "Step 2: Find available appointment slots for a doctor on a specific date. Tell the user that you will need to wait a moment while I check for available appointments.",
+                    "description": f"""Step 2: Find available appointment slots for a doctor on a specific date. Make sure to tell that you will need to wait a moment while I check for available appointments. Ask the user for the date if they dont provide it. Convert the date into YYYY-MM-DD format. The year is 2025.
+                    If they say, first half of the month or first or third week of the month, then convert that into YYYY-MM-DD format. Today's date is {datetime.datetime.now().strftime("%Y-%m-%d")}.
+                    """,
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "appointment_date": {
                                 "type": "string",
-                                "description": "Desired appointment date in YYYY-MM-DD format. The year is 2025. Ask the user for the date if they dont provide it. Ask when would they like to schedule the appointment."
+                                "description": "Desired appointment date."
                             }
                         },
                         "required": ["appointment_date"]
@@ -157,12 +161,12 @@ class LLMClient:
                                 "type": "string",
                                 "description": "The selected time slot (can be slot number or time in HH:MM format)"
                             },
-                            "visit_type": {
+                            "reason_for_visit": {
                                 "type": "string",
-                                "description": "Type of visit ('New Patient Consultation', 'Standard Office Visit', 'Virtual Visit', 'Follow-up Visit', 'Annual Physical', 'Injection/Vaccination', 'Lab Draw')"
-                            }
+                                "description": "Reason for visit"
+                        }
                         },
-                        "required": ["slot_selection", "visit_type"]
+                        "required": ["slot_selection"]
                     }
                 }
             }
@@ -178,7 +182,8 @@ class LLMClient:
             "physician_name": LLMClient.physician_name,
             "selected_date": LLMClient.selected_date,
             "available_slots": LLMClient.available_slots,
-            "physician_matches": LLMClient.physician_matches
+            "physician_matches": LLMClient.physician_matches,
+            "visit_type": LLMClient.visit_type
         }
 
     # Simplified method to save conversation state
@@ -221,7 +226,8 @@ class LLMClient:
                         return {
                             "status": "success",
                             "message": response_data.get("message"),
-                            "patient_id": response_data.get("patient", {}).get("id")
+                            "patient_id": response_data.get("patient", {}).get("id"),
+                            "is_new_patient": response_data.get("is_new_patient")
                         }
                     else:
                         return {
@@ -573,6 +579,7 @@ class LLMClient:
                         
                         patient_result = await self.verify_or_create_patient(patient_data)
                         print(f"Patient verification result: {patient_result}")
+                        print(f"Patient result status: {patient_result.get('status')}")
                         
                         if patient_result.get("status") != "success":
                             error_message = patient_result.get("message", "There was an error verifying your information")
@@ -587,6 +594,7 @@ class LLMClient:
                         # Store patient info
                         LLMClient.patient_id = patient_result.get("patient_id")
                         LLMClient.patient_name = f"{patient_first_name} {patient_last_name}"
+                        LLMClient.visit_type = "New Patient Consultation" if patient_result.get("is_new_patient") else "Follow-up Visit"
                         
                         # Step 1b: Get physician info with flexible name matching
                         physician_result = await self.get_physician_by_name(physician_name)
@@ -600,7 +608,7 @@ class LLMClient:
                             # After successful verification, ask for appointment date
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found {LLMClient.physician_name} in our system. Let's proceed now to find a date for your appointment.",
+                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found {LLMClient.physician_name} in our system. Let's proceed now to find a date for your appointment. When would you like to schedule the appointment?",
                                 content_complete=True,
                                 end_call=False,
                             )
@@ -715,9 +723,16 @@ class LLMClient:
                         LLMClient.selected_date = appointment_date
                         slots = slots_result.get("slots", [])
                         
-                        # Format time slots for display
-                        slot_options = []
-                        for i, slot in enumerate(slots[:5], 1):  # Limit to first 5 slots
+                        # Only take the 1st and 5th slots if available
+                        filtered_slots = []
+                        if len(slots) >= 1:
+                            filtered_slots.append(slots[0])  # Add 1st slot
+                        if len(slots) >= 5:
+                            filtered_slots.append(slots[4])  # Add 5th slot
+                        
+                        # Format time slots for display in a more conversational way
+                        time_options = []
+                        for i, slot in enumerate(filtered_slots, 1):  # Only use filtered slots
                             # Extract datetime and format it
                             slot_datetime = slot.get("datetime")
                             slot_time = slot_datetime.split("T")[1][:5]  # Extract time part HH:MM
@@ -731,8 +746,8 @@ class LLMClient:
                                 display_hour = 12
                             
                             time_display = f"{display_hour}:{minute} {am_pm}"
-                            slot_options.append(f"{i}. {time_display}")
-                            
+                            time_options.append(time_display)
+                        
                         # Store available slots with their indices
                         LLMClient.available_slots = [
                             {
@@ -740,15 +755,22 @@ class LLMClient:
                                 "time": slot.get("datetime").split("T")[1][:5],
                                 "datetime": slot.get("datetime")
                             }
-                            for i, slot in enumerate(slots[:5], 1)
+                            for i, slot in enumerate(filtered_slots, 1)
                         ]
                         
-                        # Present options to user
-                        slot_text = "\n".join(slot_options)
+                        # Present options to user in a conversational way
+                        if len(time_options) == 1:
+                            slot_text = f"I have one opening at {time_options[0]}"
+                        elif len(time_options) == 2:
+                            slot_text = f"I have openings at {time_options[0]} and {time_options[1]}"
+                        else:
+                            # This case won't happen with our current filtering, but keeping for robustness
+                            last_option = time_options.pop()
+                            slot_text = f"I have openings at {', '.join(time_options)}, and {last_option}"
                         
                         yield ResponseResponse(
                             response_id=request.response_id,
-                            content=f"I found the following available time slots for {LLMClient.physician_name} on {appointment_date}:\n\n{slot_text}\n\nPlease choose a time slot by number or time, and tell me what type of visit you need (such as 'New Patient Consultation', 'Follow-up Visit', 'Annual Physical', etc.).",
+                            content=f"Great! For {LLMClient.physician_name} on {appointment_date}, {slot_text}. Which time works best for you?",
                             content_complete=True,
                             end_call=False,
                         )
@@ -757,7 +779,7 @@ class LLMClient:
                     elif func_call["func_name"] == "step3_book_appointment":
                         # Extract slot selection and visit type
                         slot_selection = func_args.get("slot_selection")
-                        visit_type = func_args.get("visit_type")
+                        reason_for_visit = func_args.get("reason_for_visit")
                         
                         # Ensure we have required info from previous steps
                         if not all([LLMClient.patient_id, LLMClient.physician_id, LLMClient.selected_date, LLMClient.available_slots]):
@@ -806,7 +828,8 @@ class LLMClient:
                             "patient_id": LLMClient.patient_id,
                             "physician_id": LLMClient.physician_id,
                             "datetime": selected_datetime,
-                            "visit_type": visit_type,
+                            "visit_type": LLMClient.visit_type,
+                            "visit_note": reason_for_visit if reason_for_visit else "booked using voice ai agent",
                             "created_by": "00000000-0000-0000-0000-000000000002"
                         }
                         
@@ -827,7 +850,7 @@ class LLMClient:
                             # Booking successful
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Great news, {LLMClient.patient_name}! I've booked your {visit_type} appointment with {LLMClient.physician_name} on {LLMClient.selected_date} at {formatted_time}. Your confirmation number is {booking_result.get('appointment_id')}. Is there anything else I can help you with?",
+                                content=f"Great news, {LLMClient.patient_name}! I've booked your {LLMClient.visit_type} appointment with {LLMClient.physician_name} on {LLMClient.selected_date} at {formatted_time}. Your confirmation number is {booking_result.get('appointment_id')}. Is there anything else I can help you with?",
                                 content_complete=True,
                                 end_call=False,
                             )
