@@ -161,10 +161,6 @@ class LLMClient:
                                 "type": "string",
                                 "description": "The selected time slot (can be slot number or time in HH:MM format)"
                             },
-                            "reason_for_visit": {
-                                "type": "string",
-                                "description": "Reason for visit"
-                        }
                         },
                         "required": ["slot_selection"]
                     }
@@ -462,42 +458,75 @@ class LLMClient:
             }
 
     async def book_appointment(self, appointment_data):
-        """Make API call to book an appointment"""
-        url = "https://ep.soaper.ai/api/v1/agent/appointments/schedule"
+        """
+        Make API call to book an appointment asynchronously.
+
+        Args:
+            appointment_data (dict): Appointment details.
+
+        Returns:
+            dict: Response containing booking status and appointment details.
+        """
+        agent_api_key = "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+        base_url = "https://ep.soaper.ai/api/v1/agent/appointments/schedule"
+
         headers = {
-            "Content-Type": "application/json",
-            "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
+            "X-Agent-API-Key": agent_api_key,
+            "Content-Type": "application/json"
         }
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=appointment_data, headers=headers) as response:
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(base_url, json=appointment_data, headers=headers) as response:
                     print(f"Booking data: {appointment_data}")
-                    response_data = await response.json()
-                    print(f"Booking response: {response_data}")
                     
+                    # Handle HTTP errors (e.g., 400, 500)
+                    if response.status != 200:
+                        error_text = await response.text()
+                        print(f"API Error: {response.status} - {error_text}")
+                        return {
+                            "status": "error",
+                            "error_code": f"HTTP_{response.status}",
+                            "message": "API request failed",
+                            "details": error_text
+                        }
+
+                    # Parse JSON response safely
+                    try:
+                        response_data = await response.json()
+                    except aiohttp.ContentTypeError:
+                        raw_text = await response.text()
+                        print(f"Invalid JSON response: {raw_text}")
+                        return {
+                            "status": "error",
+                            "error_code": "INVALID_JSON",
+                            "message": "Received invalid JSON from API",
+                            "raw_response": raw_text
+                        }
+
+                    print(f"Booking response: {response_data}")
+
                     if response_data.get("success", False):
                         return {
                             "status": "success",
                             "message": response_data.get("message"),
-                            "appointment_id": response_data.get("appointment", {}).get("id")
+                            "appointment_id": response_data.get("appointment_id")
                         }
                     else:
-                        error_code = response_data.get("error_code", "UNKNOWN_ERROR")
                         return {
                             "status": "error",
-                            "error_code": error_code,
+                            "error_code": response_data.get("error_code", "UNKNOWN_ERROR"),
                             "message": response_data.get("message", "Error booking appointment")
                         }
-        
-        except Exception as e:
-            print(f"Error calling booking API: {str(e)}")
-            return {
-                "status": "error",
-                "error_code": "API_ERROR",
-                "message": f"There was a problem connecting to the booking service: {str(e)}"
-            }
 
+            except Exception as e:
+                print(f"Error calling booking API: {e}")
+                return {
+                    "status": "error",
+                    "error_code": "API_ERROR",
+                    "message": f"Connection issue with booking service: {str(e)}"
+                }
+            
     async def draft_response(self, request: ResponseRequiredRequest):
         prompt = self.prepare_prompt(request)
         print(f"Sending prompt with {len(prompt)} messages")
