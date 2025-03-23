@@ -134,7 +134,7 @@ class LLMClient:
                 "type": "function",
                 "function": {
                     "name": "step2_find_available_slots",
-                    "description": f"""Step 2: Find available appointment slots for a doctor on a specific date. Make sure to tell that you will need to wait a moment while I check for available appointments. Ask the user for the date if they dont provide it. Convert the date into YYYY-MM-DD format. The year is 2025.
+                    "description": f"""Step 2: Find available appointment slots for a doctor on a specific date. Make sure to tell that you will need to wait a moment while I check for available appointments. Ask the user for the date if they dont provide it. Convert the date into YYYY-MM-DD format.
                     If they say, first half of the month or first or third week of the month, then convert that into YYYY-MM-DD format. Today's date is {datetime.datetime.now().strftime("%Y-%m-%d")}.
                     """,
                     "parameters": {
@@ -153,13 +153,13 @@ class LLMClient:
                 "type": "function",
                 "function": {
                     "name": "step3_book_appointment",
-                    "description": "Step 3: Book an appointment using the selected time slot and visit type.",
+                    "description": "Step 3: Book an appointment using the selected time slot from the previous step. Once that is done, ask the user if they would like book the appointment at that time.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "slot_selection": {
                                 "type": "string",
-                                "description": "The selected time slot (can be slot number or time in HH:MM format)"
+                                "description": "The selected time slot"
                             },
                         },
                         "required": ["slot_selection"]
@@ -469,6 +469,8 @@ class LLMClient:
         """
         agent_api_key = "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
         base_url = "https://ep.soaper.ai/api/v1/agent/appointments/schedule"
+        
+        print(f"Booking appointment: {appointment_data}")
 
         headers = {
             "X-Agent-API-Key": agent_api_key,
@@ -478,9 +480,7 @@ class LLMClient:
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(base_url, json=appointment_data, headers=headers) as response:
-                    print(f"Booking data: {appointment_data}")
-                    
-                    # Handle HTTP errors (e.g., 400, 500)
+                    # Handle HTTP errors
                     if response.status != 200:
                         error_text = await response.text()
                         print(f"API Error: {response.status} - {error_text}")
@@ -510,13 +510,16 @@ class LLMClient:
                         return {
                             "status": "success",
                             "message": response_data.get("message"),
-                            "appointment_id": response_data.get("appointment_id")
+                            "appointment_id": response_data.get("appointment_id"),
+                            "datetime": response_data.get("datetime"),
+                            "physician_name": response_data.get("physician_name"),
+                            "visit_type": response_data.get("visit_type")
                         }
                     else:
                         return {
                             "status": "error",
-                            "error_code": response_data.get("error_code", "UNKNOWN_ERROR"),
-                            "message": response_data.get("message", "Error booking appointment")
+                            "error_code": "BOOKING_FAILED",
+                            "message": response_data.get("detail", "Error booking appointment")
                         }
 
             except Exception as e:
@@ -526,7 +529,7 @@ class LLMClient:
                     "error_code": "API_ERROR",
                     "message": f"Connection issue with booking service: {str(e)}"
                 }
-            
+                    
     async def draft_response(self, request: ResponseRequiredRequest):
         prompt = self.prepare_prompt(request)
         print(f"Sending prompt with {len(prompt)} messages")
@@ -637,7 +640,7 @@ class LLMClient:
                             # After successful verification, ask for appointment date
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information and found {LLMClient.physician_name} in our system. Let's proceed now to find a date for your appointment. When would you like to schedule the appointment?",
+                                content=f"Thank you, {patient_first_name}. I've verified your information and found {LLMClient.physician_name} in our system. Let's proceed now to find a date for your appointment. When would you like to schedule the appointment?",
                                 content_complete=True,
                                 end_call=False,
                             )
@@ -662,7 +665,7 @@ class LLMClient:
                             error_message = physician_result.get("message", "I couldn't find that doctor in our system")
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Thank you, {LLMClient.patient_name}. I've verified your information, but {error_message}. Could you please check the spelling or provide a different doctor's name?",
+                                content=f"Thank you, {patient_first_name}. I've verified your information, but {error_message}. Could you please check the spelling or provide a different doctor's name?",
                                 content_complete=True,
                                 end_call=False,
                             )
@@ -808,10 +811,9 @@ class LLMClient:
                     elif func_call["func_name"] == "step3_book_appointment":
                         # Extract slot selection and visit type
                         slot_selection = func_args.get("slot_selection")
-                        reason_for_visit = func_args.get("reason_for_visit")
                         
                         # Ensure we have required info from previous steps
-                        if not all([LLMClient.patient_id, LLMClient.physician_id, LLMClient.selected_date, LLMClient.available_slots]):
+                        if not all([LLMClient.patient_id, LLMClient.physician_id, LLMClient.selected_date]):
                             yield ResponseResponse(
                                 response_id=request.response_id,
                                 content="I need to collect more information before booking your appointment. Let's start over. Could you please provide your name, date of birth, and the doctor you'd like to see?",
@@ -858,9 +860,11 @@ class LLMClient:
                             "physician_id": LLMClient.physician_id,
                             "datetime": selected_datetime,
                             "visit_type": LLMClient.visit_type,
-                            "visit_note": reason_for_visit if reason_for_visit else "booked using voice ai agent",
-                            "created_by": "00000000-0000-0000-0000-000000000002"
+                            "visit_notes": "Test scheduling via function call",
+                            "duration_minutes": "60"
                         }
+
+                        print(f"Booking data in step 3: {booking_data}")
                         
                         booking_result = await self.book_appointment(booking_data)
                         
@@ -879,7 +883,7 @@ class LLMClient:
                             # Booking successful
                             yield ResponseResponse(
                                 response_id=request.response_id,
-                                content=f"Great news, {LLMClient.patient_name}! I've booked your {LLMClient.visit_type} appointment with {LLMClient.physician_name} on {LLMClient.selected_date} at {formatted_time}. Your confirmation number is {booking_result.get('appointment_id')}. Is there anything else I can help you with?",
+                                content=f"Great news! I've booked your appointment with {LLMClient.physician_name} on {LLMClient.selected_date} at {formatted_time}. Is there anything else I can help you with?",
                                 content_complete=True,
                                 end_call=False,
                             )
