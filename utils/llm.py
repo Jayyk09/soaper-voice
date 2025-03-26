@@ -25,6 +25,7 @@ class LLMClient:
     available_slots = []
     physician_matches = None
     visit_type = None
+    time_preference = 'any'
     
     def __init__(self):
         self.client = AsyncAzureOpenAI(
@@ -88,17 +89,17 @@ class LLMClient:
                 "type": "function",
                 "function": {
                     "name": "step1_collect_patient_and_doctor_info",
-                    "description": "Step 1: Collect patient and doctor information for booking an appointment. First ask for the patient's first and last name, after getting that, ask for the date of birth, and finally the physician's name. MAKE SURE to tell the user TO wait a moment verifying their information before calling the function.",
+                    "description": "Step 1: Collect patient and doctor information for booking an appointment. First ask for the patient's first and last name, after getting that, ask for the date of birth, and finally the physician's name. MAKE SURE to tell the user TO wait a moment verifying their information before calling the function. If it is not a common name, ask the user to spell it out.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "patient_first_name": {
                                 "type": "string",
-                                "description": "Patient's first name."
+                                "description": "Patient's first name. If it is not a common name, ask the user to spell it out."
                             },
                             "patient_last_name": {
                                 "type": "string",
-                                "description": "Patient's last name"
+                                "description": "Patient's last name. If it is not a common name, ask the user to spell it out."
                             },
                             "date_of_birth": {
                                 "type": "string",
@@ -143,6 +144,10 @@ class LLMClient:
                             "appointment_date": {
                                 "type": "string",
                                 "description": "Desired appointment date."
+                            },
+                            "time_preference": {
+                                "type": "string",
+                                "description": "The time preference of the user. Don't ask for this if the user has not provided it. It can be morning, afternoon, or evening. If the user has not provided it, then it is any."
                             }
                         },
                         "required": ["appointment_date"]
@@ -162,8 +167,8 @@ class LLMClient:
                                 "description": "The selected time slot"
                             },
                         },
-                        "required": ["slot_selection"]
-                    }
+                            "required": ["slot_selection"]
+                        }
                 }
             }
         ]
@@ -198,6 +203,8 @@ class LLMClient:
             LLMClient.available_slots = state["available_slots"]
         if "physician_matches" in state:
             LLMClient.physician_matches = state["physician_matches"]
+        if "time_preference" in state:
+            LLMClient.time_preference = state["time_preference"]
 
     # Simplified method to append to conversation
     def append_to_conversation(self, request, role, name, content):
@@ -720,6 +727,7 @@ class LLMClient:
                     elif func_call["func_name"] == "step2_find_available_slots":
                         # Extract appointment date
                         appointment_date = func_args.get("appointment_date")
+                        time_preference = func_args.get("time_preference") if func_args.get("time_preference") else "any"
                         
                         # Ensure we have patient and physician info from step 1
                         if not LLMClient.patient_id or not LLMClient.physician_id:
@@ -735,7 +743,8 @@ class LLMClient:
                         slots_data = {
                             "patient_id": LLMClient.patient_id,
                             "physician_id": LLMClient.physician_id,
-                            "date": appointment_date
+                            "date": appointment_date,
+                            "time_preference": time_preference
                         }
                         
                         slots_result = await self.get_doctor_time_slots(slots_data)

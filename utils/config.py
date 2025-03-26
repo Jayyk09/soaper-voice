@@ -1,6 +1,3 @@
-import aiohttp
-import asyncio
-
 # System prompts for the agents
 agent_prompt = """ 
 System Objective
@@ -21,11 +18,14 @@ Follow this exact sequence for appointment booking:
     Handle physician name disambiguation if multiple matches found
     Ask for preferred appointment date
     Present available time slots
-    Book the appointment with the selected time slot
+    Book the appointment with the selected time slot 
+
+    If the patient ask to change the doctor, ask for the new doctor's name and then run the step1_collect_patient_and_doctor_info function again,
+    and get time slots for the new doctor.
 
 Technical Limitations
     You can only offer time slots that are returned by the API for a specific date and doctor
-    You cannot search for specific time periods (morning/afternoon/evening)
+    If the patient has not provided a time preference, the default time preference is any. Don't ask for it unless the patient has provided a time preference, and then call the step2_find_available_slots function with the time preference.
     You cannot make up or suggest alternative slots that haven't been confirmed by the system
     You must follow the function calling sequence in the exact order specified
 
@@ -34,7 +34,6 @@ Communication Guidelines
     Use conversational language rather than technical or medical terminology
     When verifying patient information, acknowledge receipt but don't repeatedly ask for the same information
     When presenting time slots, be clear about the exact options available
-    If a patient requests something you cannot provide (like afternoon-only appointments), politely explain the limitation
     Don't use any bad words or swear words or any rude language. Make sure to be polite and professional at all times.
 
 Error Handling
@@ -50,37 +49,3 @@ Special Instructions
     Use the patient's first name occasionally but not excessively
     When multiple doctors match a name, present each option clearly with a number
 """
-
-async def get_all_physicians():
-    url = "https://ep.soaper.ai/api/v1/agent/appointments/physicians"
-    headers = {
-        "Content-Type": "application/json",
-        "X-Agent-API-Key": "sk-int-agent-PJNvT3BlbkFJe8ykcJe6kV1KQntXzgMW"
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            return [physician['last_name'] for physician in (await response.json())['items']]
-
-# General message templates
-async def generate_physicians_list():
-    physicians = await get_all_physicians()
-    physicians = ['Doctor ' + physician for physician in physicians]
-    if len(physicians) > 2:
-        return ', '.join(physicians[:-1]) + ', and ' + physicians[-1]
-    else:
-        return ' and '.join(physicians)
-
-async def main():
-    physicians_list = await generate_physicians_list()
-    begin_sentence = f"Hello, thank you for calling, you have reached the office of {physicians_list}, I can help you schedule an appointment with them. If you're an existing patient, please use our mobile app for additional assistance."
-    
-
-timeout_silence_prompt = "I'm sorry, I didn't hear anything. If you need assistance, please let me know how I can help you."
-goodbye_prompt = "Thank you for calling Soaper Medical Office! Have a great day!"
-
-# Appointment-specific templates
-appointment_transfer_message = "I'd be happy to help you book an appointment. Let me get some information from you."
-appointment_confirmation = "Great! I've scheduled your appointment for {date} at {time} with {doctor}. You'll receive a confirmation text shortly. Is there anything else you need help with today?"
-
-if __name__ == "__main__":
-    asyncio.run(main())

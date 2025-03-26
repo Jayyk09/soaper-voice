@@ -1,5 +1,3 @@
-azure-eventgrid
-azure-communication-callautomation
 openai
 dotenv
 httpx
